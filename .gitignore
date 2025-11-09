@@ -1,0 +1,12 @@
+## IDEs
+/.vscode
+/.idea
+
+## Bin
+/httpcheck
+
+## Temp dirs & trash
+/temp
+/tmp
+.DS_Store
+*.cache

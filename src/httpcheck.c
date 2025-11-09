@@ -1,0 +1,1058 @@
+/*
+ * httpcheck - Lightweight HTTP healthcheck utility for Docker containers
+ *
+ * A minimal, statically-linked HTTP client designed for container healthchecks.
+ * Returns exit code 0 for successful 2xx responses, 1 otherwise.
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <errno.h>
+#include <sys/time.h>
+#include <ctype.h>
+#include <signal.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include "version.h"
+
+/* Exit codes */
+#define EXIT_SUCCESS_CODE 0
+#define EXIT_FAILURE_CODE 1
+
+/* Default configuration values */
+#define DEFAULT_METHOD "GET"
+#define DEFAULT_METHOD_ENV "CHECK_METHOD"
+#define DEFAULT_USER_AGENT "healthcheck/" APP_VERSION
+#define DEFAULT_USER_AGENT_ENV "CHECK_USER_AGENT"
+#define DEFAULT_TIMEOUT 5
+#define DEFAULT_TIMEOUT_ENV "CHECK_TIMEOUT"
+#define DEFAULT_BASIC_AUTH_ENV "CHECK_BASIC_AUTH"
+#define DEFAULT_HOST_ENV "CHECK_HOST"
+#define DEFAULT_PORT_ENV "CHECK_PORT"
+
+/* Buffer sizes - chosen to handle typical HTTP responses without excessive memory */
+#define BUFFER_SIZE 4096
+#define MAX_HOSTNAME_LEN 256
+#define MAX_PATH_LEN 1024
+#define MAX_HEADERS 32
+#define MAX_HEADER_LEN 512
+#define MAX_BASE64_AUTH_LEN 512
+
+/* HTTP status code ranges */
+#define HTTP_STATUS_SUCCESS_MIN 200
+#define HTTP_STATUS_SUCCESS_MAX 299
+#define HTTP_STATUS_MIN 100
+#define HTTP_STATUS_MAX 999
+
+/* Timeout limits (1 second to 1 hour) */
+#define MIN_TIMEOUT 1
+#define MAX_TIMEOUT 3600
+
+/* Port range validation */
+#define MIN_PORT 1
+#define MAX_PORT 65535
+
+/* HTTP protocol constants */
+#define HTTP_SCHEME "http://"
+#define HTTP_SCHEME_LEN 7
+#define HTTP_DEFAULT_PORT 80
+#define HTTP_VERSION "HTTP/1.1"
+#define HTTP_MIN_STATUS_LINE_LEN 12  /* "HTTP/1.x XXX" */
+
+/* Base64 encoding alphabet */
+static const char BASE64_CHARS[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/* Global flag for signal handling - volatile ensures visibility across signal handler */
+static volatile sig_atomic_t interrupted = 0;
+
+/**
+ * Configuration structure holding all runtime parameters.
+ */
+typedef struct {
+    const char *method;        /* HTTP method (GET, HEAD, POST, etc.) */
+    const char *method_env;    /* Environment variable name for method */
+    const char *user_agent;    /* User-Agent header value */
+    const char *user_agent_env;/* Environment variable name for User-Agent */
+    int timeout;               /* Request timeout in seconds */
+    const char *timeout_env;   /* Environment variable name for timeout */
+    const char *url;           /* Target URL (must be last argument) */
+    const char *headers[MAX_HEADERS]; /* Custom HTTP headers */
+    int header_count;          /* Number of custom headers */
+    const char *basic_auth;    /* Basic auth credentials (username:password) */
+    const char *basic_auth_env;/* Environment variable name for basic auth */
+    const char *host_override; /* Override hostname from URL */
+    const char *host_env;      /* Environment variable name for host override */
+    int port_override;         /* Override port from URL (-1 = not set) */
+    const char *port_env;      /* Environment variable name for port override */
+} config_t;
+
+/**
+ * Command-line option definition.
+ * Used for consistent parsing and help generation.
+ */
+typedef struct {
+    const char *short_flag;    /* Short option (e.g., "-m") */
+    const char *long_flag;     /* Long option (e.g., "--method") */
+    const char *description;   /* Help text description */
+    const char *default_value; /* Default value for display */
+} option_def_t;
+
+/**
+ * Environment variable override option definition.
+ * Used for *-env flags that change environment variable names.
+ */
+typedef struct {
+    const char *long_flag;           /* Long option (e.g., "--method-env") */
+    const char *description_prefix;  /* Description prefix (e.g., "Change env variable name for") */
+    const option_def_t *parent_opt;  /* Parent option this env flag controls */
+    const char *default_env_name;    /* Default environment variable name */
+} env_option_def_t;
+
+/* Option definitions - single source of truth */
+static const option_def_t OPT_HELP = {
+    "-h", "--help", "Show this help message", NULL
+};
+static const option_def_t OPT_METHOD = {
+    "-m", "--method", "HTTP method (env: CHECK_METHOD)", DEFAULT_METHOD
+};
+static const option_def_t OPT_USER_AGENT = {
+    "-u", "--user-agent", "User-Agent header (env: CHECK_USER_AGENT)", DEFAULT_USER_AGENT
+};
+static const option_def_t OPT_TIMEOUT = {
+    "-t", "--timeout", "Request timeout in seconds (env: CHECK_TIMEOUT)", "5"
+};
+static const option_def_t OPT_HEADER = {
+    "-H", "--header", "Add custom HTTP header (can be used multiple times)", NULL
+};
+static const option_def_t OPT_BASIC_AUTH = {
+    NULL, "--basic-auth", "Basic auth credentials (username:password, env: CHECK_BASIC_AUTH)", NULL
+};
+static const option_def_t OPT_HOST = {
+    NULL, "--host", "Override hostname from URL (env: CHECK_HOST)", NULL
+};
+static const option_def_t OPT_PORT = {
+    "-p", "--port", "Override port from URL (env: CHECK_PORT)", NULL
+};
+
+/* Environment variable override options - reference parent options */
+static const env_option_def_t OPT_METHOD_ENV = {
+    "--method-env", "Change env variable name for", &OPT_METHOD, DEFAULT_METHOD_ENV
+};
+static const env_option_def_t OPT_USER_AGENT_ENV = {
+    "--user-agent-env", "Change env variable name for", &OPT_USER_AGENT, DEFAULT_USER_AGENT_ENV
+};
+static const env_option_def_t OPT_TIMEOUT_ENV = {
+    "--timeout-env", "Change env variable name for", &OPT_TIMEOUT, DEFAULT_TIMEOUT_ENV
+};
+static const env_option_def_t OPT_BASIC_AUTH_ENV = {
+    "--basic-auth-env", "Change env variable name for", &OPT_BASIC_AUTH, DEFAULT_BASIC_AUTH_ENV
+};
+static const env_option_def_t OPT_HOST_ENV = {
+    "--host-env", "Change env variable name for", &OPT_HOST, DEFAULT_HOST_ENV
+};
+static const env_option_def_t OPT_PORT_ENV = {
+    "--port-env", "Change env variable name for", &OPT_PORT, DEFAULT_PORT_ENV
+};
+
+/**
+ * Signal handler for SIGINT and SIGTERM.
+ * Sets a flag to allow graceful shutdown.
+ */
+static void signal_handler(int signum)
+{
+    (void)signum; // unused parameter
+    interrupted = 1;
+}
+
+/**
+ * Setup signal handlers for graceful shutdown.
+ * Handles SIGINT (Ctrl+C) and SIGTERM (docker stop).
+ */
+static bool setup_signal_handlers(void)
+{
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0; // no SA_RESTART - we want EINTR on blocking calls
+
+    if (sigaction(SIGINT, &sa, NULL) < 0) {
+        fprintf(stderr, "Error: failed to setup SIGINT handler: %s\n", strerror(errno));
+        return false;
+    }
+
+    if (sigaction(SIGTERM, &sa, NULL) < 0) {
+        fprintf(stderr, "Error: failed to setup SIGTERM handler: %s\n", strerror(errno));
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * Print usage information and available options.
+ * Called with -h/--help flag.
+ */
+static void print_help(void)
+{
+    fprintf(stderr, "httpcheck version %s\n\n", APP_VERSION);
+    fprintf(stderr, "Simple HTTP healthcheck utility for Docker containers.\n");
+    fprintf(stderr, "Exits with code 0 if server responds with 2xx status, 1 otherwise.\n\n");
+    fprintf(stderr, "Usage: httpcheck [OPTIONS] URL\n\n");
+    fprintf(stderr, "Options:\n");
+
+    // help option
+    fprintf(stderr, "  %s, %-20s %s\n",
+            OPT_HELP.short_flag, OPT_HELP.long_flag, OPT_HELP.description);
+
+    // host override options
+    fprintf(stderr, "      %-20s %s\n",
+            OPT_HOST.long_flag, OPT_HOST.description);
+    fprintf(stderr, "      %-20s %s %s (current: %s)\n",
+            OPT_HOST_ENV.long_flag, OPT_HOST_ENV.description_prefix,
+            OPT_HOST_ENV.parent_opt->long_flag, OPT_HOST_ENV.default_env_name);
+
+    // port override options
+    fprintf(stderr, "  %s, %-20s %s\n",
+            OPT_PORT.short_flag, OPT_PORT.long_flag, OPT_PORT.description);
+    fprintf(stderr, "      %-20s %s %s (current: %s)\n",
+            OPT_PORT_ENV.long_flag, OPT_PORT_ENV.description_prefix,
+            OPT_PORT_ENV.parent_opt->long_flag, OPT_PORT_ENV.default_env_name);
+
+    // method options
+    fprintf(stderr, "  %s, %-20s %s (default: %s)\n",
+            OPT_METHOD.short_flag, OPT_METHOD.long_flag,
+            OPT_METHOD.description, OPT_METHOD.default_value);
+    fprintf(stderr, "      %-20s %s %s (current: %s)\n",
+            OPT_METHOD_ENV.long_flag, OPT_METHOD_ENV.description_prefix,
+            OPT_METHOD_ENV.parent_opt->long_flag, OPT_METHOD_ENV.default_env_name);
+
+    // user-agent options
+    fprintf(stderr, "  %s, %-20s %s (default: %s)\n",
+            OPT_USER_AGENT.short_flag, OPT_USER_AGENT.long_flag,
+            OPT_USER_AGENT.description, OPT_USER_AGENT.default_value);
+    fprintf(stderr, "      %-20s %s %s (current: %s)\n",
+            OPT_USER_AGENT_ENV.long_flag, OPT_USER_AGENT_ENV.description_prefix,
+            OPT_USER_AGENT_ENV.parent_opt->long_flag, OPT_USER_AGENT_ENV.default_env_name);
+
+    // header option
+    fprintf(stderr, "  %s, %-20s %s\n",
+            OPT_HEADER.short_flag, OPT_HEADER.long_flag, OPT_HEADER.description);
+
+    // basic auth options
+    fprintf(stderr, "      %-20s %s\n",
+            OPT_BASIC_AUTH.long_flag, OPT_BASIC_AUTH.description);
+    fprintf(stderr, "      %-20s %s %s (current: %s)\n",
+            OPT_BASIC_AUTH_ENV.long_flag, OPT_BASIC_AUTH_ENV.description_prefix,
+            OPT_BASIC_AUTH_ENV.parent_opt->long_flag, OPT_BASIC_AUTH_ENV.default_env_name);
+
+    // timeout options
+    fprintf(stderr, "  %s, %-20s %s (default: %s)\n",
+            OPT_TIMEOUT.short_flag, OPT_TIMEOUT.long_flag,
+            OPT_TIMEOUT.description, OPT_TIMEOUT.default_value);
+    fprintf(stderr, "      %-20s %s %s (current: %s)\n",
+            OPT_TIMEOUT_ENV.long_flag, OPT_TIMEOUT_ENV.description_prefix,
+            OPT_TIMEOUT_ENV.parent_opt->long_flag, OPT_TIMEOUT_ENV.default_env_name);
+
+    fprintf(stderr, "\nExamples:\n");
+    fprintf(stderr, "  # Basic healthcheck\n");
+    fprintf(stderr, "  httpcheck http://127.0.0.1\n\n");
+
+    fprintf(stderr, "  # HEAD request to specific port\n");
+    fprintf(stderr, "  httpcheck -m HEAD http://127.0.0.1:8080\n\n");
+
+    fprintf(stderr, "  # With custom headers\n");
+    fprintf(stderr, "  httpcheck -H \"Authorization: Bearer token\" http://127.0.0.1\n\n");
+
+    fprintf(stderr, "  # With Basic Authentication\n");
+    fprintf(stderr, "  httpcheck --basic-auth user:pass http://127.0.0.1/admin\n\n");
+
+    fprintf(stderr, "  # Using environment variables\n");
+    fprintf(stderr, "  USE_METHOD=DELETE httpcheck --method-env=USE_METHOD http://127.0.0.1\n\n");
+
+    fprintf(stderr, "  # Override port from environment (useful in Docker)\n");
+    fprintf(stderr, "  APP_PORT=8080 httpcheck --port-env=APP_PORT http://localhost\n\n");
+
+    fprintf(stderr, "  # Override both host and port\n");
+    fprintf(stderr, "  httpcheck --host 10.0.0.1 --port 9000 http://localhost:8080\n\n");
+
+    fprintf(stderr, "  # Multiple custom headers with timeout\n");
+    fprintf(stderr, "  httpcheck -t 10 -H \"Accept: application/json\" -H \"X-Request-ID: 123\" http://api.example.com\n");
+}
+
+/**
+ * Base64 encode data for Basic Authentication.
+ * Simple implementation without external dependencies.
+ */
+static bool base64_encode(const char *input, char *output, size_t out_size)
+{
+    size_t input_len = strlen(input);
+    size_t output_len = ((input_len + 2) / 3) * 4;
+
+    if (output_len + 1 > out_size) {
+        return false;
+    }
+
+    size_t i = 0;
+    size_t j = 0;
+
+    while (i < input_len) {
+        uint32_t octet_a = i < input_len ? (unsigned char)input[i++] : 0;
+        uint32_t octet_b = i < input_len ? (unsigned char)input[i++] : 0;
+        uint32_t octet_c = i < input_len ? (unsigned char)input[i++] : 0;
+
+        uint32_t triple = (octet_a << 16) + (octet_b << 8) + octet_c;
+
+        output[j++] = BASE64_CHARS[(triple >> 18) & 0x3F];
+        output[j++] = BASE64_CHARS[(triple >> 12) & 0x3F];
+        output[j++] = BASE64_CHARS[(triple >> 6) & 0x3F];
+        output[j++] = BASE64_CHARS[triple & 0x3F];
+    }
+
+    // add padding
+    size_t padding = (3 - (input_len % 3)) % 3;
+    for (size_t k = 0; k < padding; k++) {
+        output[output_len - 1 - k] = '=';
+    }
+
+    output[output_len] = '\0';
+
+    return true;
+}
+
+/**
+ * Validate custom HTTP header format.
+ * Headers must be in format "Name: Value" with no leading/trailing whitespace in name.
+ */
+static bool validate_header(const char *header)
+{
+    if (header == NULL || *header == '\0') {
+        return false;
+    }
+
+    // find colon separator
+    const char *colon = strchr(header, ':');
+    if (colon == NULL || colon == header) {
+        return false;
+    }
+
+    // check for whitespace in header name (before colon)
+    for (const char *p = header; p < colon; p++) {
+        if (isspace((unsigned char)*p)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/**
+ * Parse and validate HTTP URL, extracting components.
+ * Only supports http:// scheme (no HTTPS to keep binary small).
+ */
+static bool parse_url(const char *url, char *host, size_t host_size,
+                      int *port, char *path, size_t path_size)
+{
+    // validate URL scheme - only HTTP supported
+    if (strncmp(url, HTTP_SCHEME, HTTP_SCHEME_LEN) != 0) {
+        fprintf(stderr, "Error: URL must start with %s\n", HTTP_SCHEME);
+        return false;
+    }
+
+    const char *start = url + HTTP_SCHEME_LEN; // skip "http://"
+    const char *slash = strchr(start, '/');
+    const char *colon = strchr(start, ':');
+
+    // parse hostname and port
+    if (colon != NULL && (slash == NULL || colon < slash)) {
+        // port specified in URL
+        size_t host_len = (size_t)(colon - start);
+
+        if (host_len == 0) {
+            fprintf(stderr, "Error: empty hostname\n");
+            return false;
+        }
+
+        if (host_len >= host_size) {
+            fprintf(stderr, "Error: hostname too long (max %zu chars)\n", host_size - 1);
+            return false;
+        }
+
+        memcpy(host, start, host_len);
+        host[host_len] = '\0';
+
+        // parse port number with strict validation
+        char *endptr;
+        errno = 0;
+        long parsed_port = strtol(colon + 1, &endptr, 10);
+
+        if (errno != 0 || endptr == colon + 1) {
+            fprintf(stderr, "Error: invalid port number\n");
+            return false;
+        }
+
+        if (*endptr != '/' && *endptr != '\0') {
+            fprintf(stderr, "Error: invalid characters after port number\n");
+            return false;
+        }
+
+        if (parsed_port < MIN_PORT || parsed_port > MAX_PORT) {
+            fprintf(stderr, "Error: port must be between %d and %d\n", MIN_PORT, MAX_PORT);
+            return false;
+        }
+
+        *port = (int)parsed_port;
+    } else {
+        // no port specified, use default HTTP port
+        size_t host_len = slash ? (size_t)(slash - start) : strlen(start);
+
+        if (host_len == 0) {
+            fprintf(stderr, "Error: empty hostname\n");
+            return false;
+        }
+
+        if (host_len >= host_size) {
+            fprintf(stderr, "Error: hostname too long (max %zu chars)\n", host_size - 1);
+            return false;
+        }
+
+        memcpy(host, start, host_len);
+        host[host_len] = '\0';
+        *port = HTTP_DEFAULT_PORT;
+    }
+
+    // parse path component
+    if (slash != NULL) {
+        size_t path_len = strlen(slash);
+
+        if (path_len >= path_size) {
+            fprintf(stderr, "Error: path too long (max %zu chars)\n", path_size - 1);
+            return false;
+        }
+
+        // use memcpy + null terminator for safer string handling
+        memcpy(path, slash, path_len);
+        path[path_len] = '\0';
+    } else {
+        // no path specified, use root
+        path[0] = '/';
+        path[1] = '\0';
+    }
+
+    return true;
+}
+
+/**
+ * Set socket timeout for both send and receive operations.
+ * Prevents indefinite blocking on network operations.
+ */
+static bool set_socket_timeout(int sockfd, int timeout)
+{
+    struct timeval tv;
+    tv.tv_sec = timeout;
+    tv.tv_usec = 0;
+
+    // set receive timeout
+    if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+        return false;
+    }
+
+    // set send timeout
+    if (setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) < 0) {
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * Check if HTTP status code is in success range (2xx).
+ */
+static bool is_success_status(long status)
+{
+    return status >= HTTP_STATUS_SUCCESS_MIN && status < HTTP_STATUS_SUCCESS_MAX;
+}
+
+/**
+ * Check if HTTP status code is valid.
+ */
+static bool is_valid_status(long status)
+{
+    return status >= HTTP_STATUS_MIN && status <= HTTP_STATUS_MAX;
+}
+
+/**
+ * Perform HTTP request and validate response status code.
+ */
+static bool http_request(const char *host, int port, const char *path,
+                         const char *method, const char *user_agent, int timeout,
+                         const char **headers, int header_count, const char *basic_auth)
+{
+    int sockfd = -1;
+    bool result = false;
+
+    // create TCP socket
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        fprintf(stderr, "Error: failed to create socket: %s\n", strerror(errno));
+
+        return false;
+    }
+
+    // configure socket timeouts to prevent hanging
+    if (!set_socket_timeout(sockfd, timeout)) {
+        fprintf(stderr, "Error: failed to set socket timeout: %s\n", strerror(errno));
+
+        goto cleanup;
+    }
+
+    // resolve hostname - gethostbyname is not thread-safe but acceptable for single-threaded use
+    struct hostent *server = gethostbyname(host);
+    if (server == NULL) {
+        fprintf(stderr, "Error: failed to resolve host '%s': %s\n", host, hstrerror(h_errno));
+
+        goto cleanup;
+    }
+
+    // prepare server address structure
+    struct sockaddr_in serv_addr;
+
+    memset(&serv_addr, 0, sizeof(serv_addr));
+    serv_addr.sin_family = AF_INET;
+    memcpy(&serv_addr.sin_addr.s_addr, server->h_addr, (size_t)server->h_length);
+    serv_addr.sin_port = htons((uint16_t)port);
+
+    // establish connection
+    if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+        if (errno == EINTR) {
+            fprintf(stderr, "Error: interrupted by signal\n");
+        } else {
+            fprintf(stderr, "Error: failed to connect to %s:%d: %s\n", host, port, strerror(errno));
+        }
+
+        goto cleanup;
+    }
+
+    // check for interruption after blocking operation
+    if (interrupted) {
+        fprintf(stderr, "Error: interrupted by signal\n");
+
+        goto cleanup;
+    }
+
+    // build HTTP request - using HTTP/1.1 with Connection: close for simplicity
+    char request[BUFFER_SIZE];
+    int req_len = snprintf(request, sizeof(request),
+        "%s %s %s\r\n"
+        "Host: %s\r\n"
+        "User-Agent: %s\r\n",
+        method, path, HTTP_VERSION, host, user_agent
+				);
+
+    // check for snprintf overflow or error
+    if (req_len < 0 || (size_t)req_len >= sizeof(request)) {
+        fprintf(stderr, "Error: HTTP request too long\n");
+
+        goto cleanup;
+    }
+
+    // add Basic Authentication header if provided
+    if (basic_auth != NULL) {
+        char auth_encoded[MAX_BASE64_AUTH_LEN];
+        if (!base64_encode(basic_auth, auth_encoded, sizeof(auth_encoded))) {
+            fprintf(stderr, "Error: basic auth credentials too long\n");
+
+            goto cleanup;
+        }
+
+        int auth_len = snprintf(request + req_len, sizeof(request) - (size_t)req_len, "Authorization: Basic %s\r\n", auth_encoded);
+
+        if (auth_len < 0 || (size_t)req_len + (size_t)auth_len >= sizeof(request)) {
+            fprintf(stderr, "Error: HTTP request too long (with auth header)\n");
+
+            goto cleanup;
+        }
+
+        req_len += auth_len;
+    }
+
+    // add custom headers
+    for (int i = 0; i < header_count; i++) {
+        int hdr_len = snprintf(request + req_len, sizeof(request) - (size_t)req_len, "%s\r\n", headers[i]);
+
+        if (hdr_len < 0 || (size_t)req_len + (size_t)hdr_len >= sizeof(request)) {
+            fprintf(stderr, "Error: HTTP request too long (with custom headers)\n");
+
+            goto cleanup;
+        }
+
+        req_len += hdr_len;
+    }
+
+    // add Connection header and final CRLF
+    int final_len = snprintf(request + req_len, sizeof(request) - (size_t)req_len, "Connection: close\r\n\r\n");
+
+    if (final_len < 0 || (size_t)req_len + (size_t)final_len >= sizeof(request)) {
+        fprintf(stderr, "Error: HTTP request too long\n");
+
+        goto cleanup;
+    }
+
+    req_len += final_len;
+
+    // send HTTP request
+    ssize_t sent = send(sockfd, request, (size_t)req_len, 0);
+    if (sent < 0) {
+        if (errno == EINTR) {
+            fprintf(stderr, "Error: interrupted by signal\n");
+        } else {
+            fprintf(stderr, "Error: failed to send request: %s\n", strerror(errno));
+        }
+
+        goto cleanup;
+    }
+
+    if (sent != req_len) {
+        fprintf(stderr, "Error: incomplete request sent (%zd of %d bytes)\n", sent, req_len);
+        goto cleanup;
+    }
+
+    // check for interruption after blocking operation
+    if (interrupted) {
+        fprintf(stderr, "Error: interrupted by signal\n");
+
+        goto cleanup;
+    }
+
+    // receive HTTP response - only need status line, not full body
+    char response[BUFFER_SIZE];
+    ssize_t received = recv(sockfd, response, sizeof(response) - 1, 0);
+    if (received < 0) {
+        if (errno == EINTR) {
+            fprintf(stderr, "Error: interrupted by signal\n");
+        } else {
+            fprintf(stderr, "Error: failed to receive response: %s\n", strerror(errno));
+        }
+
+        goto cleanup;
+    }
+
+    if (received == 0) {
+        fprintf(stderr, "Error: connection closed by server\n");
+
+        goto cleanup;
+    }
+
+    response[received] = '\0';
+
+    // validate minimum response length for "HTTP/1.x XXX"
+    if (received < HTTP_MIN_STATUS_LINE_LEN) {
+        fprintf(stderr, "Error: response too short\n");
+
+        goto cleanup;
+    }
+
+    // validate HTTP response format
+    if (strncmp(response, "HTTP/1.", 7) != 0) {
+        fprintf(stderr, "Error: invalid HTTP response (expected HTTP/1.x)\n");
+
+        goto cleanup;
+    }
+
+    // locate status code in response
+    char *status_start = strchr(response, ' ');
+    if (status_start == NULL) {
+        fprintf(stderr, "Error: malformed HTTP response (no status code)\n");
+
+        goto cleanup;
+    }
+    status_start++; // skip space
+
+    // parse status code with strict validation
+    char *endptr;
+    errno = 0;
+    long status = strtol(status_start, &endptr, 10);
+
+    if (errno != 0 || endptr == status_start) {
+        fprintf(stderr, "Error: invalid HTTP status code\n");
+
+        goto cleanup;
+    }
+
+    // validate status code range
+    if (!is_valid_status(status)) {
+        fprintf(stderr, "Error: HTTP status code out of range: %ld\n", status);
+
+        goto cleanup;
+    }
+
+    // check if status is in success range (2xx)
+    if (!is_success_status(status)) {
+        fprintf(stderr, "Error: HTTP status %ld (expected 2xx)\n", status);
+
+        goto cleanup;
+    }
+
+    // success - received 2xx status
+    result = true;
+
+cleanup:
+    // always close socket to prevent fd leaks
+    if (sockfd >= 0) {
+        close(sockfd);
+    }
+
+    return result;
+}
+
+/**
+ * Check if argument matches environment option flag.
+ */
+static bool matches_env_option(const char *arg, const env_option_def_t *opt)
+{
+    return opt->long_flag != NULL && strcmp(arg, opt->long_flag) == 0;
+}
+
+/**
+ * Check if argument matches short or long option flag.
+ */
+static bool matches_option(const char *arg, const option_def_t *opt)
+{
+    if (opt->short_flag != NULL && strcmp(arg, opt->short_flag) == 0) {
+        return true;
+    }
+
+    if (opt->long_flag != NULL && strcmp(arg, opt->long_flag) == 0) {
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * Extract value from --option=value format.
+ */
+static bool extract_equals_value(const char *arg, const char *prefix, const char **value_out)
+{
+    size_t prefix_len = strlen(prefix);
+
+    if (strncmp(arg, prefix, prefix_len) != 0) {
+        return false;
+    }
+
+    const char *value = arg + prefix_len;
+    if (*value == '\0') {
+        return false;
+    }
+
+    *value_out = value;
+
+    return true;
+}
+
+/**
+ * Parse a port number from string with validation.
+ */
+static bool parse_port(const char *str, int *port)
+{
+    char *endptr;
+    errno = 0;
+    long value = strtol(str, &endptr, 10);
+
+    if (errno != 0 || *endptr != '\0' || endptr == str) {
+        return false;
+    }
+
+    if (value < MIN_PORT || value > MAX_PORT) {
+        return false;
+    }
+
+    *port = (int)value;
+    return true;
+}
+
+/**
+ * Parse a timeout value from string with validation.
+ */
+static bool parse_timeout(const char *str, int *timeout)
+{
+    char *endptr;
+    errno = 0;
+    long value = strtol(str, &endptr, 10);
+
+    if (errno != 0 || *endptr != '\0' || endptr == str) {
+        return false;
+    }
+
+    if (value < MIN_TIMEOUT || value > MAX_TIMEOUT) {
+        return false;
+    }
+
+    *timeout = (int)value;
+
+    return true;
+}
+
+/**
+ * Main entry point - parse arguments, resolve configuration, execute request.
+ */
+int main(int argc, char *argv[])
+{
+    // setup signal handlers for graceful shutdown
+    if (!setup_signal_handlers()) {
+        return EXIT_FAILURE_CODE;
+    }
+
+    // initialize configuration with defaults
+    config_t config = {
+        .method = NULL,
+        .method_env = DEFAULT_METHOD_ENV,
+        .user_agent = NULL,
+        .user_agent_env = DEFAULT_USER_AGENT_ENV,
+        .timeout = DEFAULT_TIMEOUT,
+        .timeout_env = DEFAULT_TIMEOUT_ENV,
+        .url = NULL,
+        .headers = {NULL},
+        .header_count = 0,
+        .basic_auth = NULL,
+        .basic_auth_env = DEFAULT_BASIC_AUTH_ENV,
+        .host_override = NULL,
+        .host_env = DEFAULT_HOST_ENV,
+        .port_override = -1,
+        .port_env = DEFAULT_PORT_ENV
+    };
+
+    // parse command-line arguments
+    for (int i = 1; i < argc; i++) {
+        const char *arg = argv[i];
+        const char *value;
+
+        if (matches_option(arg, &OPT_HELP)) {
+            print_help();
+            return EXIT_SUCCESS_CODE;
+        } else if (matches_option(arg, &OPT_METHOD)) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", arg);
+                return EXIT_FAILURE_CODE;
+            }
+            config.method = argv[++i];
+        } else if (extract_equals_value(arg, "--method-env=", &value)) {
+            config.method_env = value;
+        } else if (matches_env_option(arg, &OPT_METHOD_ENV)) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", arg);
+                return EXIT_FAILURE_CODE;
+            }
+            config.method_env = argv[++i];
+        } else if (matches_option(arg, &OPT_USER_AGENT)) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", arg);
+                return EXIT_FAILURE_CODE;
+            }
+            config.user_agent = argv[++i];
+        } else if (extract_equals_value(arg, "--user-agent-env=", &value)) {
+            config.user_agent_env = value;
+        } else if (matches_env_option(arg, &OPT_USER_AGENT_ENV)) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", arg);
+                return EXIT_FAILURE_CODE;
+            }
+            config.user_agent_env = argv[++i];
+        } else if (matches_option(arg, &OPT_TIMEOUT)) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", arg);
+                return EXIT_FAILURE_CODE;
+            }
+            if (!parse_timeout(argv[++i], &config.timeout)) {
+                fprintf(stderr, "Error: timeout must be between %d and %d seconds\n",
+                        MIN_TIMEOUT, MAX_TIMEOUT);
+                return EXIT_FAILURE_CODE;
+            }
+        } else if (extract_equals_value(arg, "--timeout-env=", &value)) {
+            config.timeout_env = value;
+        } else if (matches_env_option(arg, &OPT_TIMEOUT_ENV)) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", arg);
+                return EXIT_FAILURE_CODE;
+            }
+            config.timeout_env = argv[++i];
+        } else if (matches_option(arg, &OPT_HEADER)) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", arg);
+                return EXIT_FAILURE_CODE;
+            }
+            if (config.header_count >= MAX_HEADERS) {
+                fprintf(stderr, "Error: too many headers (max %d)\n", MAX_HEADERS);
+                return EXIT_FAILURE_CODE;
+            }
+            const char *header = argv[++i];
+            if (!validate_header(header)) {
+                fprintf(stderr, "Error: invalid header format (expected 'Name: Value'): %s\n", header);
+                return EXIT_FAILURE_CODE;
+            }
+            if (strlen(header) >= MAX_HEADER_LEN) {
+                fprintf(stderr, "Error: header too long (max %d chars): %s\n", MAX_HEADER_LEN - 1, header);
+                return EXIT_FAILURE_CODE;
+            }
+            config.headers[config.header_count++] = header;
+        } else if (matches_option(arg, &OPT_BASIC_AUTH)) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", arg);
+                return EXIT_FAILURE_CODE;
+            }
+            config.basic_auth = argv[++i];
+            if (strchr(config.basic_auth, ':') == NULL) {
+                fprintf(stderr, "Error: basic auth must be in format 'username:password'\n");
+                return EXIT_FAILURE_CODE;
+            }
+        } else if (extract_equals_value(arg, "--basic-auth-env=", &value)) {
+            config.basic_auth_env = value;
+        } else if (matches_env_option(arg, &OPT_BASIC_AUTH_ENV)) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", arg);
+                return EXIT_FAILURE_CODE;
+            }
+            config.basic_auth_env = argv[++i];
+        } else if (matches_option(arg, &OPT_HOST)) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", arg);
+                return EXIT_FAILURE_CODE;
+            }
+            config.host_override = argv[++i];
+            if (*config.host_override == '\0') {
+                fprintf(stderr, "Error: host cannot be empty\n");
+                return EXIT_FAILURE_CODE;
+            }
+        } else if (extract_equals_value(arg, "--host-env=", &value)) {
+            config.host_env = value;
+        } else if (matches_env_option(arg, &OPT_HOST_ENV)) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", arg);
+                return EXIT_FAILURE_CODE;
+            }
+            config.host_env = argv[++i];
+        } else if (matches_option(arg, &OPT_PORT)) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", arg);
+                return EXIT_FAILURE_CODE;
+            }
+            if (!parse_port(argv[++i], &config.port_override)) {
+                fprintf(stderr, "Error: port must be between %d and %d\n",
+                        MIN_PORT, MAX_PORT);
+                return EXIT_FAILURE_CODE;
+            }
+        } else if (extract_equals_value(arg, "--port-env=", &value)) {
+            config.port_env = value;
+        } else if (matches_env_option(arg, &OPT_PORT_ENV)) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", arg);
+                return EXIT_FAILURE_CODE;
+            }
+            config.port_env = argv[++i];
+        } else if (i == argc - 1) {
+            // URL must be last argument
+            config.url = arg;
+        } else {
+            fprintf(stderr, "Error: unknown option or misplaced argument: %s\n", arg);
+            fprintf(stderr, "URL must be the last argument\n");
+            return EXIT_FAILURE_CODE;
+        }
+    }
+
+    // validate that URL was provided
+    if (config.url == NULL) {
+        fprintf(stderr, "Error: no URL provided\n");
+        fprintf(stderr, "Try 'httpcheck --help' for usage information\n");
+
+        return EXIT_FAILURE_CODE;
+    }
+
+    // resolve method from environment if not explicitly set
+    if (config.method == NULL) {
+        const char *env_method = getenv(config.method_env);
+        config.method = (env_method != NULL) ? env_method : DEFAULT_METHOD;
+    }
+
+    // resolve user-agent from environment if not explicitly set
+    if (config.user_agent == NULL) {
+        const char *env_ua = getenv(config.user_agent_env);
+        config.user_agent = (env_ua != NULL) ? env_ua : DEFAULT_USER_AGENT;
+    }
+
+    // resolve timeout from environment if not explicitly set via flag
+    const char *env_timeout = getenv(config.timeout_env);
+    if (env_timeout != NULL) {
+        int parsed_timeout;
+        if (parse_timeout(env_timeout, &parsed_timeout)) {
+            config.timeout = parsed_timeout;
+        }
+        // silently ignore invalid environment values
+    }
+
+    // resolve basic auth from environment if not explicitly set
+    if (config.basic_auth == NULL) {
+        const char *env_auth = getenv(config.basic_auth_env);
+        if (env_auth != NULL && strchr(env_auth, ':') != NULL) {
+            config.basic_auth = env_auth;
+        }
+    }
+
+    // resolve host override from environment if not explicitly set
+    if (config.host_override == NULL) {
+        const char *env_host = getenv(config.host_env);
+        if (env_host != NULL && *env_host != '\0') {
+            config.host_override = env_host;
+        }
+    }
+
+    // resolve port override from environment if not explicitly set
+    if (config.port_override == -1) {
+        const char *env_port = getenv(config.port_env);
+        if (env_port != NULL) {
+            int parsed_port;
+            if (parse_port(env_port, &parsed_port)) {
+                config.port_override = parsed_port;
+            }
+            // silently ignore invalid environment values
+        }
+    }
+
+    // parse URL into components - using stack buffers to avoid allocation
+    char host[MAX_HOSTNAME_LEN];
+    int port;
+    char path[MAX_PATH_LEN];
+
+    if (!parse_url(config.url, host, sizeof(host), &port, path, sizeof(path))) {
+        return EXIT_FAILURE_CODE;
+    }
+
+    // apply host override if provided
+    if (config.host_override != NULL) {
+        size_t override_len = strlen(config.host_override);
+        if (override_len >= sizeof(host)) {
+            fprintf(stderr, "Error: host override too long (max %zu chars)\n", sizeof(host) - 1);
+            return EXIT_FAILURE_CODE;
+        }
+
+        memcpy(host, config.host_override, override_len);
+        host[override_len] = '\0';
+    }
+
+    // apply port override if provided
+    if (config.port_override != -1) {
+        port = config.port_override;
+    }
+
+    // execute HTTP request and return result
+    bool success = http_request(host, port, path, config.method,
+                                config.user_agent, config.timeout,
+                                config.headers, config.header_count, config.basic_auth);
+
+    return success ? EXIT_SUCCESS_CODE : EXIT_FAILURE_CODE;
+}
