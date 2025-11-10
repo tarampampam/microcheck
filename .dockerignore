@@ -1,0 +1,6 @@
+## Ignore everything
+*
+
+## Except the following files and directories
+!/src
+!/Makefile

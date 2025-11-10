@@ -4,8 +4,11 @@
 
 ## Bin
 /httpcheck
+/httpscheck
 
 ## Temp dirs & trash
+/libs
+/.test-certs
 /temp
 /tmp
 .DS_Store
