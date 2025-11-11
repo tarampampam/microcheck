@@ -7,6 +7,9 @@ This test suite validates the portcheck binary by:
 2. Executing portcheck with specific arguments/environment variables
 3. Validating exit codes and error messages
 
+Some tests connect to real public servers (DNS, STUN) to verify
+network connectivity handling. These tests require internet access.
+
 Usage:
     python3 portcheck.py [--bin PATH]
 """
@@ -773,6 +776,52 @@ def get_test_cases() -> List[TestCase]:
             want_exit_code=1,
             want_stderr_contains="port is required",
             use_udp=True,
+            no_server=True,
+        ),
+
+        # Real server tests
+        TestCase(
+            name="TCP: Real server - Google DNS (8.8.8.8:53)",
+            give_args=["--host", "8.8.8.8", "--port", "53", "--timeout", "3"],
+            want_exit_code=0,
+            no_server=True,
+        ),
+
+        TestCase(
+            name="TCP: Real server - Cloudflare DNS (1.1.1.1:53)",
+            give_args=["--host", "1.1.1.1", "--port", "53", "--timeout", "3"],
+            want_exit_code=0,
+            no_server=True,
+        ),
+
+        TestCase(
+            name="UDP: Real server - Google DNS (8.8.8.8:53)",
+            give_args=["--udp", "--host", "8.8.8.8", "--port", "53", "--timeout", "3"],
+            want_exit_code=0,
+            use_udp=True,
+            no_server=True,
+        ),
+
+        TestCase(
+            name="UDP: Real server - Cloudflare DNS (1.1.1.1:53)",
+            give_args=["--udp", "--host", "1.1.1.1", "--port", "53", "--timeout", "3"],
+            want_exit_code=0,
+            use_udp=True,
+            no_server=True,
+        ),
+
+        TestCase(
+            name="UDP: Real server - Google STUN (stun.l.google.com:19302)",
+            give_args=["--udp", "--host", "stun.l.google.com", "--port", "19302", "--timeout", "3"],
+            want_exit_code=0,
+            use_udp=True,
+            no_server=True,
+        ),
+
+        TestCase(
+            name="TCP: Real server - Quad9 DNS (9.9.9.9:53)",
+            give_args=["--host", "9.9.9.9", "--port", "53", "--timeout", "3"],
+            want_exit_code=0,
             no_server=True,
         ),
     ]
