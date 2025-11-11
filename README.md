@@ -1,3 +1,12 @@
+<p align="center">
+  <a href="https://github.com/tarampampam/microcheck#readme">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://socialify.git.ci/tarampampam/microcheck/image?description=1&font=Raleway&forks=1&issues=1&logo=https%3A%2F%2Fupload.wikimedia.org%2Fwikipedia%2Fcommons%2Fa%2Fa7%2FDocker-svgrepo-com.svg&owner=1&pulls=1&pattern=Solid&stargazers=1&theme=Dark">
+      <img align="center" src="https://socialify.git.ci/tarampampam/microcheck/image?description=1&font=Raleway&forks=1&issues=1&logo=https%3A%2F%2Fupload.wikimedia.org%2Fwikipedia%2Fcommons%2Fa%2Fa7%2FDocker-svgrepo-com.svg&owner=1&pulls=1&pattern=Solid&stargazers=1&theme=Light">
+    </picture>
+  </a>
+</p>
+
 # Lightweight health check utilities for Docker containers
 
 Minimal, statically linked tools designed for [container health checks][docker-healthcheck]. Built with musl for
@@ -20,7 +29,13 @@ designed to match Docker’s expectations for health checks (0 = healthy, 1 = un
 So, think of this as an alternative to:
 
 ```diff
+-# install curl for health checks (+~10MB)
+-RUN apt update && apt install -y curl && rm -r /var/lib/apt/lists/*
+-
 -HEALTHCHECK --interval=5m --timeout=3s CMD curl -f http://localhost:8080/ || exit 1
++# add httpcheck binary (+~75KB)
++COPY --from=ghcr.io/tarampampam/microcheck /bin/httpcheck /bin/httpcheck
++
 +HEALTHCHECK --interval=5m --timeout=3s CMD ["httpcheck", "http://localhost:8080/"]
 ```
 
