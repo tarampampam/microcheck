@@ -52,9 +52,12 @@ So, think of this as an alternative to:
 
 ### `httpcheck` & `httpscheck`
 
-Options:
+Those tools perform HTTP health checks. `httpscheck` includes TLS support, while `httpcheck` does not to reduce
+the binary file size. Both tools share the same command-line interface, and even compile from the same source
+code (but with different build flags).
 
 ```
+Options:
   -h, --help               Show this help message
       --host               Override hostname from URL (env: CHECK_HOST)
       --host-env           Change env variable name for --host (current: CHECK_HOST)
@@ -73,7 +76,18 @@ Options:
 
 ### `portcheck`
 
+This tool checks if a TCP or UDP port is open on a given host (usually `127.0.0.1`). For TCP, it attempts to
+establish a connection, while for UDP... Since UDP is connectionless - very frequently it may not be possible to
+determine if the port is open or closed.
+
+> [!IMPORTANT]
+> Most UDP servers respond only to valid protocol requests. This tool sends nearly empty UDP datagram,
+> which may not receive a response from many services. Use UDP checks only when you are certain the target
+> will respond appropriately.
+
 ```
+Options:
+  -h, --help               Show this help message
       --tcp                Use TCP protocol (default)
       --udp                Use UDP protocol
       --host               Target hostname or IPv4 address (env: CHECK_HOST) (default: 127.0.0.1)

@@ -154,7 +154,7 @@ static void print_help(void) {
           "Returns exit code 0 if port is accessible, 1 otherwise.\n\n");
 
   fprintf(stderr, "WARNING: Most UDP servers respond only to valid protocol ");
-  fprintf(stderr, "requests. This tool sends nearly empty UDP datagrams,\n");
+  fprintf(stderr, "requests. This tool sends nearly empty UDP datagram,\n");
   fprintf(stderr, "which may not receive a response from many services. ");
   fprintf(stderr, "Use UDP checks only when you are certain the target\n");
   fprintf(stderr, "will respond appropriately.\n\n");
