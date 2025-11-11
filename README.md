@@ -133,12 +133,28 @@ APP_PORT=8080 httpcheck --port-env=APP_PORT http://127.0.0.1
 | [GitHub Container Registry][ghcr] | `ghcr.io/tarampampam/microcheck` |
 | [Docker Hub][docker-hub]          | `tarampampam/microcheck`         |
 
+[docker-hub]:https://hub.docker.com/r/tarampampam/microcheck
+[ghcr]:https://github.com/users/tarampampam/packages/container/package/microcheck
+
 > [!IMPORTANT]
 > Using the `latest` tag for the Docker image is highly discouraged due to potential backward-incompatible changes
 > during **major** upgrades. Please use tags in the `X.Y.Z` format.
 
-[docker-hub]:https://hub.docker.com/r/tarampampam/microcheck
-[ghcr]:https://github.com/users/tarampampam/packages/container/package/microcheck
+The following platforms for this image are available:
+
+```shell
+$ docker run --rm mplatform/mquery ghcr.io/tarampampam/microcheck
+Image: ghcr.io/tarampampam/microcheck:latest
+ * Manifest List: Yes (Image type: application/vnd.oci.image.index.v1+json)
+ * Supported platforms:
+   - linux/386
+   - linux/amd64
+   - linux/arm/v6
+   - linux/arm/v7
+   - linux/arm64
+   - linux/ppc64le
+   - linux/s390x
+```
 
 ## ⚙ Pre-compiled binaries
 
