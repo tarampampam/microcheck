@@ -227,3 +227,22 @@ To build the tools from source, ensure you have the following dependencies insta
 After cloning the repository, build the tools using the `Makefile` - execute `make`.
 
 For testing, you need `python3` and `openssl` installed. Run tests with `make test`.
+
+## 👾 Support
+
+[![Issues][badge-issues]][issues]
+[![Issues][badge-prs]][prs]
+
+If you encounter any bugs in the project, please [create an issue][new-issue] in this repository.
+
+[badge-issues]:https://img.shields.io/github/issues/tarampampam/microcheck.svg?maxAge=45
+[badge-prs]:https://img.shields.io/github/issues-pr/tarampampam/microcheck.svg?maxAge=45
+[issues]:https://github.com/tarampampam/microcheck/issues
+[prs]:https://github.com/tarampampam/microcheck/pulls
+[new-issue]:https://github.com/tarampampam/microcheck/issues/new/choose
+
+## 📖 License
+
+This is open-sourced software licensed under the [MIT License][license].
+
+[license]:https://github.com/tarampampam/microcheck/blob/master/LICENSE
