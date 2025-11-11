@@ -15,6 +15,7 @@ RUN set -x \
     && make CC=gcc APP_VERSION="$APP_VERSION" \
     && ./httpcheck --help \
     && ./httpscheck --help \
+    && ./portcheck --help \
     && ls -lh .
 
 WORKDIR /tmp/rootfs
@@ -24,6 +25,7 @@ RUN set -x \
     && mkdir -p ./bin ./etc \
     && mv /src/httpcheck ./bin/httpcheck \
     && mv /src/httpscheck ./bin/httpscheck \
+    && mv /src/portcheck ./bin/portcheck \
     && echo 'nobody:x:10001:10001::/nonexistent:/sbin/nologin' > ./etc/passwd \
     && echo 'nogroup:x:10001:' > ./etc/group
 

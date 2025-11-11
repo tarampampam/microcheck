@@ -48,6 +48,7 @@ So, think of this as an alternative to:
 |--------------|:------:|--------------------------------|
 | `httpcheck`  | ~75KB  | Check HTTP (only) endpoints    |
 | `httpscheck` | ~500KB | Check HTTP and HTTPS endpoints |
+| `portcheck`  | ~70KB  | Check TCP/UDP ports            |
 
 ### `httpcheck` & `httpscheck`
 
@@ -67,6 +68,19 @@ Options:
       --basic-auth         Basic auth credentials (username:password, env: CHECK_BASIC_AUTH)
       --basic-auth-env     Change env variable name for --basic-auth (current: CHECK_BASIC_AUTH)
   -t, --timeout            Request timeout in seconds (env: CHECK_TIMEOUT) (default: 5)
+      --timeout-env        Change env variable name for --timeout (current: CHECK_TIMEOUT)
+```
+
+### `portcheck`
+
+```
+      --tcp                Use TCP protocol (default)
+      --udp                Use UDP protocol
+      --host               Target hostname or IPv4 address (env: CHECK_HOST) (default: 127.0.0.1)
+      --host-env           Change env variable name for --host (current: CHECK_HOST)
+  -p, --port               Target port number (env: CHECK_PORT, required)
+      --port-env           Change env variable name for --port (current: CHECK_PORT)
+  -t, --timeout            Check timeout in seconds (env: CHECK_TIMEOUT) (default: 5)
       --timeout-env        Change env variable name for --timeout (current: CHECK_TIMEOUT)
 ```
 
@@ -90,6 +104,7 @@ To build the tools from source, ensure you have the following dependencies insta
 * `musl-gcc`
 * `cmake`
 * `wget`
+* `patch`
 * Standard build tools (`make`, `tar`)
 
 After cloning the repository, build the tools using the `Makefile` - `make all`.

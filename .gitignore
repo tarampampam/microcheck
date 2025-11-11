@@ -5,6 +5,7 @@
 ## Bin
 /httpcheck
 /httpscheck
+/portcheck
 
 ## Temp dirs & trash
 /libs

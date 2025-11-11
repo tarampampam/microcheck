@@ -68,3 +68,4 @@ jobs:
         run: |
           docker run --rm --platform "${{ matrix.platform }}" localhost:5000/ci/app:latest httpcheck --help
           docker run --rm --platform "${{ matrix.platform }}" localhost:5000/ci/app:latest httpscheck --help
+          docker run --rm --platform "${{ matrix.platform }}" localhost:5000/ci/app:latest portcheck --help
