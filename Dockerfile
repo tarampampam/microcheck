@@ -3,7 +3,7 @@
 FROM alpine:latest AS builder
 
 # install build dependencies (musl is Alpine's default libc)
-RUN apk add --no-cache make file gcc musl-dev cmake wget tar
+RUN apk add --no-cache make file gcc musl-dev patch cmake wget tar
 
 COPY . /src
 WORKDIR /src

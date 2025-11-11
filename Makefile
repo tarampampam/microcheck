@@ -19,7 +19,6 @@ MBEDTLS_TFPSA_INCLUDE         = $(MBEDTLS_DIR)/tf-psa-crypto/include
 MBEDTLS_TFPSA_BUILTIN_INCLUDE = $(MBEDTLS_DIR)/tf-psa-crypto/drivers/builtin/include
 MBEDTLS_LIB_DIR               = $(MBEDTLS_BUILD_DIR)/library
 
-.ONESHELL:
 .DEFAULT_GOAL : all
 .PHONY: src/version.h clean
 
@@ -36,6 +35,8 @@ $(MBEDTLS_DIR):
 		tar -xjf ./libs/mbedtls.tar.bz2 -C ./libs; \
 		rm ./libs/mbedtls.tar.bz2; \
 		mv ./libs/mbedtls-4.0.0 $(MBEDTLS_DIR); \
+		cd $(MBEDTLS_DIR); \
+		patch -p1 < ../../patches/mbedtls4/arm64-build.patch; \
 	else \
 		echo "mbedtls already downloaded"; \
 	fi
