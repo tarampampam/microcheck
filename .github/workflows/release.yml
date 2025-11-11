@@ -58,7 +58,7 @@ jobs:
         with: {registry: ghcr.io, username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}'}
       - run: |
           docker pull --platform "${{ matrix.platform }}" ghcr.io/${{ github.repository }}:${{ steps.slug.outputs.version-semantic }}
-          docker create --name app --platform "${{ matrix.platform }}" ghcr.io/${{ github.repository }}:${{ steps.slug.outputs.version-semantic }}
+          docker create --name app --platform "${{ matrix.platform }}" ghcr.io/${{ github.repository }}:${{ steps.slug.outputs.version-semantic }} /noop
           mkdir ./dist
           docker cp app:/bin/httpcheck ./dist/httpcheck
           docker cp app:/bin/httpscheck ./dist/httpscheck

@@ -31,7 +31,7 @@ So, think of this as an alternative to:
 [docker-healthcheck]: https://docs.docker.com/reference/dockerfile/#healthcheck
 [k8s-probes]: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
 
-## Features
+## 🔥 Features
 
 * **Statically linked**: Works in minimal containers (e.g., `scratch`, `distroless`)
 * **Pretty fast**: Written in pure `C`, compiled with `musl`
@@ -42,7 +42,7 @@ So, think of this as an alternative to:
 * **Flexible configuration**: Command-line flags and environment variables
 * **Docker-friendly**: Handles signals (`SIGTERM`, `SIGINT`) gracefully
 
-## Tools
+## 🧩 Tools
 
 | Tool         |  Size  | Use case                       |
 |--------------|:------:|--------------------------------|
@@ -111,7 +111,59 @@ CHECK_METHOD=HEAD httpcheck http://127.0.0.1
 APP_PORT=8080 httpcheck --port-env=APP_PORT http://127.0.0.1
 ```
 
-## Building from source
+## 🐋 Docker image
+
+| Registry                          | Image                            |
+|-----------------------------------|----------------------------------|
+| [GitHub Container Registry][ghcr] | `ghcr.io/tarampampam/microcheck` |
+| [Docker Hub][docker-hub]          | `tarampampam/microcheck`         |
+
+> [!IMPORTANT]
+> Using the `latest` tag for the Docker image is highly discouraged due to potential backward-incompatible changes
+> during **major** upgrades. Please use tags in the `X.Y.Z` format.
+
+[docker-hub]:https://hub.docker.com/r/tarampampam/microcheck
+[ghcr]:https://github.com/users/tarampampam/packages/container/package/microcheck
+
+## ⚙ Pre-compiled binaries
+
+Pre-compiled static binaries are available on the [releases page][releases-page]. Download the appropriate binary
+for your architecture and operating system.
+
+[releases-page]: https://github.com/tarampampam/microcheck/releases
+
+## 🚀 Usage examples
+
+Healthcheck for HTTP server (distroless image):
+
+```Dockerfile
+# use empty filesystem
+FROM scratch
+
+# import some executable application
+COPY --from=docker.io/containous/whoami:v1.5.0 /whoami /whoami
+
+# import httpcheck from current repository image (exactly 'httpcheck' due
+# to we don't need TLS here)
+COPY --from=ghcr.io/tarampampam/microcheck /bin/httpcheck /bin/httpcheck
+
+# docs: <https://docs.docker.com/reference/dockerfile#healthcheck>
+HEALTHCHECK --interval=5s --retries=2 CMD ["httpcheck", "http://127.0.0.1:80"]
+
+ENTRYPOINT ["/whoami"]
+```
+
+Let's build it and run:
+
+```shell
+$ docker build -t http-check:local - < ./examples/http-check.Dockerfile
+$ docker run --rm -d --name http-check http-check:local
+$ docker ps --filter 'name=http-check' --format '{{.Status}}'
+Up 5 seconds (healthy)
+$ docker kill http-check
+```
+
+## 🏗 Building from source
 
 To build the tools from source, ensure you have the following dependencies installed:
 
