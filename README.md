@@ -38,7 +38,7 @@ So, think of this as an alternative to:
 * **Multi-arch and cross-compiled** (x86_64, ARM, etc.)
 * **Distributed** as single binaries (see the releases page) and Docker images
 * **Minimal size**: Optimized for small Docker images
-* **TLS support**: Uses `mbedTLS` for HTTPS (accepts self-signed certificates)
+* **TLS support**: Uses `mbedTLS` for HTTPS (accepts self-signed certificates and does NOT verify SSL/TLS certificates)
 * **Flexible configuration**: Command-line flags and environment variables
 * **Docker-friendly**: Handles signals (`SIGTERM`, `SIGINT`) gracefully
 
@@ -107,6 +107,6 @@ To build the tools from source, ensure you have the following dependencies insta
 * `patch`
 * Standard build tools (`make`, `tar`)
 
-After cloning the repository, build the tools using the `Makefile` - `make all`.
+After cloning the repository, build the tools using the `Makefile` - execute `make`.
 
 For testing, you need `python3` and `openssl` installed. Run tests with `make test`.
