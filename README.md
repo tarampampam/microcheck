@@ -132,9 +132,10 @@ for your architecture and operating system.
 
 [releases-page]: https://github.com/tarampampam/microcheck/releases
 
-## 🚀 Usage examples
+## 🔌 Usage examples
 
-Healthcheck for HTTP server (distroless image):
+<details>
+  <summary><strong>🚀 Healthcheck for HTTP server</strong></summary>
 
 ```Dockerfile
 # use empty filesystem
@@ -148,9 +149,9 @@ COPY --from=docker.io/containous/whoami:v1.5.0 /whoami /whoami
 COPY --from=ghcr.io/tarampampam/microcheck /bin/httpcheck /bin/httpcheck
 
 # docs: <https://docs.docker.com/reference/dockerfile#healthcheck>
-HEALTHCHECK --interval=5s --retries=2 CMD ["httpcheck", "http://127.0.0.1:80"]
+HEALTHCHECK --interval=5s --retries=2 CMD ["httpcheck", "http://127.0.0.1:8080/health"]
 
-ENTRYPOINT ["/whoami"]
+ENTRYPOINT ["/whoami", "-port", "8080"]
 ```
 
 Let's build it and run:
@@ -159,9 +160,44 @@ Let's build it and run:
 $ docker build -t http-check:local - < ./examples/http-check.Dockerfile
 $ docker run --rm -d --name http-check http-check:local
 $ docker ps --filter 'name=http-check' --format '{{.Status}}'
-Up 5 seconds (healthy)
+Up 6 seconds (healthy)
 $ docker kill http-check
 ```
+
+</details>
+
+<details>
+  <summary><strong>🚀 Healthcheck for TCP server</strong></summary>
+
+The same as previous, but using `portcheck`:
+
+```Dockerfile
+# use empty filesystem
+FROM scratch
+
+# import some executable application
+COPY --from=docker.io/containous/whoami:v1.5.0 /whoami /whoami
+
+# import portcheck because we need only TCP port check here
+COPY --from=ghcr.io/tarampampam/microcheck /bin/portcheck /bin/portcheck
+
+# docs: <https://docs.docker.com/reference/dockerfile#healthcheck>
+HEALTHCHECK --interval=5s --retries=2 CMD ["portcheck", "--port", "8080"]
+
+ENTRYPOINT ["/whoami", "-port", "8080"]
+```
+
+Let's build it and run:
+
+```shell
+$ docker build -t tcp-check:local - < ./examples/tcp-check.Dockerfile
+$ docker run --rm -d --name tcp-check tcp-check:local
+$ docker ps --filter 'name=tcp-check' --format '{{.Status}}'
+Up 7 seconds (healthy)
+$ docker kill tcp-check
+```
+
+</details>
 
 ## 🏗 Building from source
 

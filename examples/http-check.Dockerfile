@@ -9,6 +9,6 @@ COPY --from=docker.io/containous/whoami:v1.5.0 /whoami /whoami
 COPY --from=ghcr.io/tarampampam/microcheck /bin/httpcheck /bin/httpcheck
 
 # docs: <https://docs.docker.com/reference/dockerfile#healthcheck>
-HEALTHCHECK --interval=5s --retries=2 CMD ["httpcheck", "http://127.0.0.1:80"]
+HEALTHCHECK --interval=5s --retries=2 CMD ["httpcheck", "http://127.0.0.1:8080/health"]
 
-ENTRYPOINT ["/whoami"]
+ENTRYPOINT ["/whoami", "-port", "8080"]

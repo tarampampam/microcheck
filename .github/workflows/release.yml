@@ -66,7 +66,7 @@ jobs:
           cd ./dist
           tar -czf ../release.tar.gz *
           zip -r ../release.zip .
-      - {uses: gacts/github-slug@v1, id: filename, with: {to-slug: 'release-${{ matrix.platform }}'}}
+      - {uses: gacts/github-slug@v1, id: filename, with: {to-slug: '${{ matrix.platform }}'}}
       - uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
