@@ -394,8 +394,8 @@ def get_test_cases() -> List[TestCase]:
         ),
 
         TestCase(
-            name="UDP: Closed port check fails",
-            give_args=["--udp", "--port", "9"],
+            name="UDP: Closed port check fails on localhost",
+            give_args=["--udp", "--host", "127.0.0.1", "--port", "1"],
             want_exit_code=1,
             want_stderr_contains="port is closed",
             use_udp=True,
@@ -700,7 +700,8 @@ def get_test_cases() -> List[TestCase]:
         TestCase(
             name="UDP: Timeout on unreachable host",
             give_args=["--udp", "--timeout", "1", "--host", "10.255.255.1", "--port", "9999"],
-            want_exit_code=0,  # UDP считает порт открытым если нет ICMP unreachable
+            want_exit_code=1,
+            want_stderr_contains="no response from port",
             timeout_override=3.0,
             use_udp=True,
             no_server=True,
@@ -779,7 +780,7 @@ def get_test_cases() -> List[TestCase]:
             no_server=True,
         ),
 
-        # Real server tests
+        # Real server tests (TCP only - UDP servers typically don't respond to random probes)
         TestCase(
             name="TCP: Real server - Google DNS (8.8.8.8:53)",
             give_args=["--host", "8.8.8.8", "--port", "53", "--timeout", "3"],
@@ -795,33 +796,18 @@ def get_test_cases() -> List[TestCase]:
         ),
 
         TestCase(
-            name="UDP: Real server - Google DNS (8.8.8.8:53)",
-            give_args=["--udp", "--host", "8.8.8.8", "--port", "53", "--timeout", "3"],
-            want_exit_code=0,
-            use_udp=True,
-            no_server=True,
-        ),
-
-        TestCase(
-            name="UDP: Real server - Cloudflare DNS (1.1.1.1:53)",
-            give_args=["--udp", "--host", "1.1.1.1", "--port", "53", "--timeout", "3"],
-            want_exit_code=0,
-            use_udp=True,
-            no_server=True,
-        ),
-
-        TestCase(
-            name="UDP: Real server - Google STUN (stun.l.google.com:19302)",
-            give_args=["--udp", "--host", "stun.l.google.com", "--port", "19302", "--timeout", "3"],
-            want_exit_code=0,
-            use_udp=True,
-            no_server=True,
-        ),
-
-        TestCase(
             name="TCP: Real server - Quad9 DNS (9.9.9.9:53)",
             give_args=["--host", "9.9.9.9", "--port", "53", "--timeout", "3"],
             want_exit_code=0,
+            no_server=True,
+        ),
+
+        TestCase(
+            name="UDP: Closed port on localhost",
+            give_args=["--udp", "--host", "127.0.0.1", "--port", "1"],
+            want_exit_code=1,
+            want_stderr_contains="port is closed",
+            use_udp=True,
             no_server=True,
         ),
     ]

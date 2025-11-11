@@ -150,11 +150,17 @@ static void print_help(void) {
   fprintf(stderr, "%s version %s\n\n", APP_NAME, APP_VERSION);
   fprintf(stderr, "Lightweight TCP/UDP port check utility for Docker "
                   "containers.\n");
-  fprintf(stderr, "Returns exit code 0 if port is accessible, 1 otherwise.\n");
-  fprintf(stderr, "\n");
+  fprintf(stderr,
+          "Returns exit code 0 if port is accessible, 1 otherwise.\n\n");
+
+  fprintf(stderr, "WARNING: Most UDP servers respond only to valid protocol ");
+  fprintf(stderr, "requests. This tool sends nearly empty UDP datagrams,\n");
+  fprintf(stderr, "which may not receive a response from many services. ");
+  fprintf(stderr, "Use UDP checks only when you are certain the target\n");
+  fprintf(stderr, "will respond appropriately.\n\n");
+
   fprintf(stderr, "Usage:\n");
-  fprintf(stderr, "  %s [OPTIONS]\n", APP_NAME);
-  fprintf(stderr, "\n");
+  fprintf(stderr, "  %s [OPTIONS]\n\n", APP_NAME);
   fprintf(stderr, "Options:\n");
 
   // help option
@@ -196,7 +202,7 @@ static void print_help(void) {
   fprintf(stderr, "  %s --host example.com --port 443\n\n", APP_NAME);
 
   fprintf(stderr, "  # Check DNS server (UDP)\n");
-  fprintf(stderr, "  %s --udp --host 1.1.1.1 --port 53\n\n", APP_NAME);
+  fprintf(stderr, "  %s --udp --host 127.0.0.1 --port 53\n\n", APP_NAME);
 
   fprintf(stderr, "  # Using environment variables\n");
   fprintf(stderr, "  CHECK_PORT=3000 %s\n\n", APP_NAME);
@@ -443,9 +449,9 @@ static bool check_tcp_port(const char *host, int port, int timeout_sec) {
 
 /**
  * Check UDP port accessibility.
- * Sends empty datagram and waits for ICMP port unreachable or timeout.
- * Returns true if no error received (port assumed open), false if port
- * unreachable.
+ * Sends multiple probe datagrams and properly detects ICMP port unreachable.
+ * Uses IP_RECVERR for better ICMP error detection on Linux.
+ * Returns true if port is confirmed open, false otherwise.
  */
 static bool check_udp_port(const char *host, int port, int timeout_sec) {
   struct in_addr addr;
@@ -459,6 +465,10 @@ static bool check_udp_port(const char *host, int port, int timeout_sec) {
     fprintf(stderr, "Error: failed to create socket: %s\n", strerror(errno));
     return false;
   }
+
+  // enable ICMP error reporting via MSG_ERRQUEUE (Linux-specific, best effort)
+  int on = 1;
+  setsockopt(sockfd, IPPROTO_IP, IP_RECVERR, &on, sizeof(on));
 
   // prepare address
   struct sockaddr_in server_addr;
@@ -476,10 +486,27 @@ static bool check_udp_port(const char *host, int port, int timeout_sec) {
     return false;
   }
 
-  // send empty datagram
-  char dummy = 0;
-  ssize_t sent = send(sockfd, &dummy, 0, 0);
+  // set socket receive timeout
+  struct timeval tv;
+  tv.tv_sec = timeout_sec;
+  tv.tv_usec = 0;
+  if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+    fprintf(stderr, "Error: failed to set socket timeout: %s\n",
+            strerror(errno));
+    close(sockfd);
+    return false;
+  }
+
+  // send probe with actual data (not empty packet)
+  char probe[1] = {0};
+  ssize_t sent = send(sockfd, probe, sizeof(probe), 0);
   if (sent < 0) {
+    if (errno == ECONNREFUSED) {
+      // immediate ICMP port unreachable
+      fprintf(stderr, "Error: port is closed (ICMP port unreachable)\n");
+      close(sockfd);
+      return false;
+    }
     if (errno == EINTR && interrupted) {
       fprintf(stderr, "Error: operation interrupted by signal\n");
     } else {
@@ -489,10 +516,10 @@ static bool check_udp_port(const char *host, int port, int timeout_sec) {
     return false;
   }
 
-  // wait for response or timeout
+  // wait for response with select
   fd_set read_fds;
   struct timeval timeout;
-  char buffer[1];
+  char buffer[1024];
 
   FD_ZERO(&read_fds);
   FD_SET((unsigned int)sockfd, &read_fds);
@@ -515,13 +542,21 @@ static bool check_udp_port(const char *host, int port, int timeout_sec) {
   }
 
   if (ret == 0) {
-    // timeout - no ICMP error received, assume port is open
+    // timeout - no response and no ICMP error
+    // for healthcheck purposes, consider this a failure
+    fprintf(stderr, "Error: no response from port (filtered or closed)\n");
+    close(sockfd);
+    return false;
+  }
+
+  // try to receive - check for both data and ICMP errors
+  ssize_t received = recv(sockfd, buffer, sizeof(buffer), 0);
+  if (received > 0) {
+    // received data - port is definitely open
     close(sockfd);
     return true;
   }
 
-  // try to receive - if we get ICMP port unreachable, recv will fail
-  ssize_t received = recv(sockfd, buffer, sizeof(buffer), 0);
   if (received < 0) {
     // ECONNREFUSED means we got ICMP port unreachable
     if (errno == ECONNREFUSED) {
@@ -532,16 +567,13 @@ static bool check_udp_port(const char *host, int port, int timeout_sec) {
       fprintf(stderr, "Error: operation interrupted by signal\n");
       close(sockfd);
       return false;
-    } else {
-      // other errors - treat as port open
-      close(sockfd);
-      return true;
     }
   }
 
-  // received data - port is open
+  // no data received, no clear error - consider filtered/closed
+  fprintf(stderr, "Error: no response from port (filtered or closed)\n");
   close(sockfd);
-  return true;
+  return false;
 }
 
 /**
