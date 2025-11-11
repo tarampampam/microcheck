@@ -35,10 +35,6 @@ jobs:
   build-image:
     name: Build docker image (${{ matrix.platform }})
     runs-on: ubuntu-latest
-    services:
-      registry:
-        image: registry:2
-        ports: ['5000:5000']
     strategy:
       fail-fast: false
       matrix:
@@ -60,12 +56,13 @@ jobs:
         with:
           context: .
           file: Dockerfile
-          push: true
+          push: false
+          load: true
           platforms: ${{ matrix.platform }}
           build-args: APP_VERSION=${{ steps.slug.outputs.commit-hash-short }}
-          tags: localhost:5000/ci/app:latest
+          tags: app:local
       - if: matrix.platform == 'linux/amd64'
         run: |
-          docker run --rm --platform "${{ matrix.platform }}" localhost:5000/ci/app:latest httpcheck --help
-          docker run --rm --platform "${{ matrix.platform }}" localhost:5000/ci/app:latest httpscheck --help
-          docker run --rm --platform "${{ matrix.platform }}" localhost:5000/ci/app:latest portcheck --help
+          docker run --rm app:local httpcheck --help
+          docker run --rm app:local httpscheck --help
+          docker run --rm app:local portcheck --help
