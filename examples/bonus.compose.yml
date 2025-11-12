@@ -1,0 +1,104 @@
+# yaml-language-server: $schema=https://cdn.jsdelivr.net/gh/compose-spec/compose-spec@master/schema/compose-spec.json
+
+# to test, execute:
+# docker compose -f ./bonus.compose.yml up; docker compose -f ./bonus.compose.yml down
+
+name: microcheck-examples
+
+services:
+  app:
+    image: docker.io/library/alpine:latest
+    command: ["sh", "-c", "echo 'ready!' && sleep infinity"]
+    depends_on:
+      postgresql: {condition: service_healthy}
+      temporal: {condition: service_healthy}
+      jaeger: {condition: service_healthy}
+      minio: {condition: service_healthy}
+      mysql: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      adminer: {condition: service_healthy}
+      caddy: {condition: service_healthy}
+      cassandra: {condition: service_healthy}
+
+  postgresql:
+    image: docker.io/library/postgres:18-alpine
+    environment:
+      POSTGRES_DB: some_dbname # POSTGRES_DATABASE in older versions
+      POSTGRES_USER: some_user
+      POSTGRES_PASSWORD: some_password
+    ports: ['5432/tcp']
+    healthcheck:
+      test: ['CMD', 'pg_isready', '-U', 'some_user', '-d', 'some_dbname']
+      interval: 10s
+
+  temporal: # Temporal server
+    image: docker.io/temporalio/auto-setup:1.29
+    environment:
+      DB: postgres12_pgx
+      DB_PORT: 5432
+      POSTGRES_USER: some_user
+      POSTGRES_PWD: some_password
+      POSTGRES_SEEDS: postgresql
+      BIND_ON_IP: 0.0.0.0
+    ports: ['7233/tcp']
+    depends_on:
+      postgresql: {condition: service_healthy}
+    healthcheck:
+      test: ['CMD', 'tctl', '--address', '127.0.0.1:7233', 'workflow', 'list']
+      interval: 10s
+
+  jaeger:
+    image: docker.io/jaegertracing/all-in-one:1.60
+    ports: ['6831/udp', '16686/tcp', '4318/tcp']
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:14269/healthz']
+      interval: 10s
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data --json --console-address ':9090'
+    ports: ['9000/tcp', '9090/tcp']
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://127.0.0.1:9000/minio/health/live']
+      interval: 10s
+
+  mysql:
+    image: docker.io/library/mysql:9
+    environment:
+      MYSQL_RANDOM_ROOT_PASSWORD: 'true'
+      MYSQL_DATABASE: some_dbname
+      MYSQL_USER: some_user
+      MYSQL_PASSWORD: some_password
+    ports: ['3306/tcp', '32601:3306/tcp'] # use port 32601 for local development
+    healthcheck:
+      test: ['CMD', 'mysql', '-h', '127.0.0.1', '--user=some_user', '--password=some_password', '--execute', 'SELECT 1']
+      interval: 10s
+
+  redis:
+    image: docker.io/library/redis:8-alpine
+    ports: ['6379/tcp']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+
+  adminer:
+    image: docker.io/library/adminer:5
+    ports: ['8080/tcp']
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 10s
+
+  caddy:
+    image: docker.io/library/caddy:2-alpine
+    ports: ['80/tcp', '443/tcp']
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:80/']
+      interval: 10s
+
+  cassandra:
+    image: docker.io/library/cassandra:5
+    ports: ['9042/tcp']
+    healthcheck:
+      test: ['CMD', 'cqlsh', '-e', 'DESCRIBE KEYSPACES', '127.0.0.1', '9042']
+      interval: 10s
+      start_period: 60s

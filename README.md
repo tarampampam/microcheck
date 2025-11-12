@@ -61,7 +61,7 @@ So, think of this as an alternative to:
 * **Statically linked**: Works in minimal containers (e.g., `scratch`, `distroless`)
 * **Pretty fast**: Written in pure `C`, compiled with `musl`
 * **Multi-arch and cross-compiled** (x86_64, ARM, etc.)
-* **Distributed** as single binaries (see the releases page) and Docker images
+* **Distributed** as single binaries (see the releases page) and Docker image
 * **Minimal size**: Optimized for small Docker images
 * **TLS support**: Uses `mbedTLS` for HTTPS (accepts self-signed certificates and does NOT verify SSL/TLS certificates)
 * **Protocol auto-detection** (`httpscheck` only): Automatically tries HTTPS first, falls back to HTTP on TLS errors
@@ -297,9 +297,204 @@ $ docker kill tcp-check
 
 </details>
 
-## 🏗 Building from source
+## 🎁 Bonus level - adding healthcheck to popular images
 
-To build the tools from source, ensure you have the following dependencies installed:
+Since you're here, you might find it useful to know how to healthcheck some popular Docker images (you don't need
+tools from this repository for that, but it might be interesting anyway):
+
+<details>
+  <summary><strong>🧪 PostgreSQL</strong></summary>
+
+> PostgreSQL, often simply "Postgres", is an object-relational database management system (ORDBMS) with an emphasis
+> on extensibility and standards-compliance.
+
+```yaml
+# compose.yml
+
+services:
+  postgresql:
+    image: docker.io/library/postgres:18-alpine
+    environment:
+      POSTGRES_DB: some_dbname # POSTGRES_DATABASE in older versions
+      POSTGRES_USER: some_user
+      POSTGRES_PASSWORD: some_password
+    ports: ['5432/tcp']
+    healthcheck:
+      test: ['CMD', 'pg_isready', '-U', 'some_user', '-d', 'some_dbname']
+      interval: 10s
+```
+
+</details>
+
+<details>
+  <summary><strong>🧪 Temporal</strong></summary>
+
+> Temporal is a scalable and reliable runtime for durable function executions.
+
+```yaml
+# compose.yml
+
+services:
+  temporal:
+    image: docker.io/temporalio/auto-setup:1.28.1
+    environment:
+      BIND_ON_IP: 0.0.0.0
+    ports: ['7233/tcp']
+    healthcheck:
+      test: ['CMD', 'tctl', '--address', '127.0.0.1:7233', 'workflow', 'list']
+      interval: 10s
+```
+
+</details>
+
+<details>
+  <summary><strong>🧪 Jaeger</strong></summary>
+
+> Jaeger is an open-source, distributed tracing platform used to monitor and troubleshoot complex
+> microservices architectures.
+
+```yaml
+# compose.yml
+
+services:
+  jaeger:
+    image: docker.io/jaegertracing/all-in-one:1.60
+    ports: ['6831/udp', '16686/tcp', '4318/tcp']
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:14269/healthz']
+      interval: 10s
+```
+
+</details>
+
+<details>
+  <summary><strong>🧪 Minio</strong></summary>
+
+> MinIO is a high-performance, Kubernetes-native object storage system that is compatible with the Amazon S3 API.
+
+```yaml
+# compose.yml
+
+services:
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data --json --console-address ':9090'
+    ports: ['9000/tcp', '9090/tcp']
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://127.0.0.1:9000/minio/health/live']
+      interval: 10s
+```
+
+</details>
+
+<details>
+  <summary><strong>🧪 MySQL</strong></summary>
+
+> MySQL is an open-source relational database management system (RDBMS).
+
+```yaml
+# compose.yml
+
+services:
+  mysql:
+    image: docker.io/library/mysql:9
+    environment:
+      MYSQL_RANDOM_ROOT_PASSWORD: 'true'
+      MYSQL_DATABASE: some_dbname
+      MYSQL_USER: some_user
+      MYSQL_PASSWORD: some_password
+    ports: ['3306/tcp', '3306/tcp'] # use port 32601 for local development
+    healthcheck:
+      test: ['CMD', 'mysql', '-h', '127.0.0.1', '--user=some_user', '--password=some_password', '--execute', 'SELECT 1']
+      interval: 10s
+```
+
+</details>
+
+<details>
+  <summary><strong>🧪 Redis</strong></summary>
+
+> Redis is an open-source, in-memory data structure store used as a database, cache, and message broker.
+
+```yaml
+# compose.yml
+
+services:
+  redis:
+    image: docker.io/library/redis:8-alpine
+    ports: ['6379/tcp']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+```
+
+</details>
+
+<details>
+  <summary><strong>🧪 Adminer (phpMyAdmin)</strong></summary>
+
+> Adminer (formerly phpMinAdmin) is a full-featured database management tool written in PHP.
+
+```yaml
+# compose.yml
+
+services:
+  adminer:
+    image: docker.io/library/adminer:5
+    ports: ['8080/tcp']
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 10s
+```
+
+</details>
+
+<details>
+  <summary><strong>🧪 Caddy</strong></summary>
+
+> Caddy 2 is a powerful, enterprise-ready, open source web server with automatic HTTPS written in Go.
+
+```yaml
+# compose.yml
+
+services:
+  caddy:
+    image: docker.io/library/caddy:2-alpine
+    ports: ['80/tcp', '443/tcp']
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:80/']
+      interval: 10s
+```
+
+</details>
+
+<details>
+  <summary><strong>🧪 Cassandra</strong></summary>
+
+> Apache Cassandra is an open source distributed database management system designed to handle large amounts of
+> data across many commodity servers, providing high availability with no single point of failure.
+
+```yaml
+# compose.yml
+
+services:
+  cassandra:
+    image: docker.io/library/cassandra:5
+    ports: ['9042/tcp']
+    healthcheck:
+      test: ['CMD', 'cqlsh', '-e', 'DESCRIBE KEYSPACES', '127.0.0.1', '9042']
+      interval: 10s
+      start_period: 60s # <-- important
+```
+
+</details>
+
+> [!TIP]
+> Feel free to contribute more examples via pull requests!
+
+## 🏗 Building from sources
+
+To build the tools from sources, ensure you have the following dependencies installed:
 
 * `musl-gcc`
 * `cmake`
