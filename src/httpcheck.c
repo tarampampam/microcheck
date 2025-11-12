@@ -40,6 +40,16 @@
 #define EXIT_SUCCESS_CODE 0
 #define EXIT_FAILURE_CODE 1
 
+/* Request result types - used to distinguish connection errors from HTTP errors
+ */
+typedef enum {
+  REQUEST_SUCCESS = 0, /* 2xx status code received */
+  REQUEST_HTTP_ERROR =
+      1, /* Valid HTTP response but non-2xx status (4xx, 5xx) */
+  REQUEST_CONNECTION_ERROR =
+      2 /* Connection/TLS error, no valid HTTP response */
+} request_result_t;
+
 /* Default configuration values */
 #define DEFAULT_METHOD "GET"
 #define DEFAULT_METHOD_ENV "CHECK_METHOD"
@@ -439,11 +449,15 @@ static bool validate_header(const char *header) {
  *   0 = HTTP explicitly requested
  *   1 = HTTPS explicitly requested
  *  -1 = auto-detect (try HTTPS first, then HTTP on TLS connection failure)
+ *
+ * explicit_port_in_url: set to true if port was explicitly specified in URL
  */
 static bool parse_url(const char *url, char *host, size_t host_size, int *port,
-                      char *path, size_t path_size, int *protocol_mode) {
+                      char *path, size_t path_size, int *protocol_mode,
+                      bool *explicit_port_in_url) {
   const char *start;
   int default_port;
+  *explicit_port_in_url = false;
 
 #ifdef WITH_TLS
   // Check for HTTPS scheme
@@ -520,6 +534,7 @@ static bool parse_url(const char *url, char *host, size_t host_size, int *port,
     }
 
     *port = (int)parsed_port;
+    *explicit_port_in_url = true; // Port was explicitly specified in URL
   } else {
     // no port specified, use default port
     size_t host_len = slash ? (size_t)(slash - start) : strlen(start);
@@ -600,13 +615,16 @@ static bool is_valid_status(long status) {
 #ifdef WITH_TLS
 /**
  * Perform HTTPS request using mbedTLS.
+ * Returns REQUEST_SUCCESS for 2xx responses, REQUEST_HTTP_ERROR for non-2xx
+ * responses, and REQUEST_CONNECTION_ERROR for connection/TLS errors.
  */
-static bool https_request(const char *host, int port, const char *path,
-                          const char *method, const char *user_agent,
-                          int timeout, const char **headers, int header_count,
-                          const char *basic_auth) {
+static request_result_t https_request(const char *host, int port,
+                                      const char *path, const char *method,
+                                      const char *user_agent, int timeout,
+                                      const char **headers, int header_count,
+                                      const char *basic_auth) {
   int ret;
-  bool result = false;
+  request_result_t result = REQUEST_CONNECTION_ERROR;
   mbedtls_ssl_context ssl;
   mbedtls_ssl_config conf;
   mbedtls_net_context server_fd;
@@ -908,17 +926,19 @@ static bool https_request(const char *host, int port, const char *path,
   // Validate status code range
   if (!is_valid_status(status)) {
     fprintf(stderr, "Error: HTTP status code out of range: %ld\n", status);
+    result = REQUEST_CONNECTION_ERROR; // Invalid response format
     goto cleanup;
   }
 
   // Check if status is in success range (2xx)
   if (!is_success_status(status)) {
     fprintf(stderr, "Error: HTTP status %ld (expected 2xx)\n", status);
+    result = REQUEST_HTTP_ERROR; // Valid HTTP response but non-2xx
     goto cleanup;
   }
 
   // Success - received 2xx status
-  result = true;
+  result = REQUEST_SUCCESS;
 
 cleanup:
   // Close SSL connection
@@ -935,20 +955,23 @@ cleanup:
 
 /**
  * Perform HTTP request and validate response status code.
+ * Returns REQUEST_SUCCESS for 2xx responses, REQUEST_HTTP_ERROR for non-2xx
+ * responses, and REQUEST_CONNECTION_ERROR for connection errors.
  */
-static bool http_request(const char *host, int port, const char *path,
-                         const char *method, const char *user_agent,
-                         int timeout, const char **headers, int header_count,
-                         const char *basic_auth) {
+static request_result_t http_request(const char *host, int port,
+                                     const char *path, const char *method,
+                                     const char *user_agent, int timeout,
+                                     const char **headers, int header_count,
+                                     const char *basic_auth) {
   int sockfd = -1;
-  bool result = false;
+  request_result_t result = REQUEST_CONNECTION_ERROR;
 
   // create TCP socket
   sockfd = socket(AF_INET, SOCK_STREAM, 0);
   if (sockfd < 0) {
     fprintf(stderr, "Error: failed to create socket: %s\n", strerror(errno));
 
-    return false;
+    return REQUEST_CONNECTION_ERROR;
   }
 
   // configure socket timeouts to prevent hanging
@@ -1175,19 +1198,19 @@ static bool http_request(const char *host, int port, const char *path,
   // validate status code range
   if (!is_valid_status(status)) {
     fprintf(stderr, "Error: HTTP status code out of range: %ld\n", status);
-
+    result = REQUEST_CONNECTION_ERROR; // Invalid response format
     goto cleanup;
   }
 
   // check if status is in success range (2xx)
   if (!is_success_status(status)) {
     fprintf(stderr, "Error: HTTP status %ld (expected 2xx)\n", status);
-
+    result = REQUEST_HTTP_ERROR; // Valid HTTP response but non-2xx
     goto cleanup;
   }
 
   // success - received 2xx status
-  result = true;
+  result = REQUEST_SUCCESS;
 
 cleanup:
   // always close socket to prevent fd leaks
@@ -1516,9 +1539,10 @@ int main(int argc, char *argv[]) {
   int port;
   char path[MAX_PATH_LEN];
   int protocol_mode = 0;
+  bool explicit_port_in_url = false;
 
   if (!parse_url(config.url, host, sizeof(host), &port, path, sizeof(path),
-                 &protocol_mode)) {
+                 &protocol_mode, &explicit_port_in_url)) {
     return EXIT_FAILURE_CODE;
   }
 
@@ -1552,43 +1576,47 @@ int main(int argc, char *argv[]) {
   }
 
   // execute HTTP/HTTPS request and return result
-  bool success;
+  request_result_t result;
 
 #ifdef WITH_TLS
   if (config.protocol_mode == 1) {
     // Explicit HTTPS
-    success = https_request(host, port, path, config.method, config.user_agent,
-                            config.timeout, config.headers, config.header_count,
-                            config.basic_auth);
-  } else if (config.protocol_mode == 0) {
-    // Explicit HTTP
-    success = http_request(host, port, path, config.method, config.user_agent,
+    result = https_request(host, port, path, config.method, config.user_agent,
                            config.timeout, config.headers, config.header_count,
                            config.basic_auth);
+  } else if (config.protocol_mode == 0) {
+    // Explicit HTTP
+    result = http_request(host, port, path, config.method, config.user_agent,
+                          config.timeout, config.headers, config.header_count,
+                          config.basic_auth);
   } else {
-    // Auto-detect: try HTTPS first, fallback to HTTP on TLS connection failure
-    success = https_request(host, port, path, config.method, config.user_agent,
-                            config.timeout, config.headers, config.header_count,
-                            config.basic_auth);
+    // Auto-detect: try HTTPS first, fallback to HTTP ONLY on TLS connection
+    // failure
+    result = https_request(host, port, path, config.method, config.user_agent,
+                           config.timeout, config.headers, config.header_count,
+                           config.basic_auth);
 
-    if (!success) {
-      // If HTTPS failed, try HTTP with default HTTP port if no port was
-      // explicitly specified Only fallback if the port is still at HTTPS
-      // default (443)
-      if (port == HTTPS_DEFAULT_PORT && config.port_override == -1) {
+    // Only fallback to HTTP if we had a connection/TLS error (not HTTP status
+    // error)
+    if (result == REQUEST_CONNECTION_ERROR) {
+      // Adjust port from HTTPS default to HTTP default only if:
+      // 1. Port was not explicitly specified in URL, AND
+      // 2. Port was not overridden via --port flag or env variable
+      if (!explicit_port_in_url && config.port_override == -1 &&
+          port == HTTPS_DEFAULT_PORT) {
         port = HTTP_DEFAULT_PORT;
       }
 
-      success = http_request(host, port, path, config.method, config.user_agent,
-                             config.timeout, config.headers,
-                             config.header_count, config.basic_auth);
+      result = http_request(host, port, path, config.method, config.user_agent,
+                            config.timeout, config.headers, config.header_count,
+                            config.basic_auth);
     }
   }
 #else
-  success = http_request(host, port, path, config.method, config.user_agent,
-                         config.timeout, config.headers, config.header_count,
-                         config.basic_auth);
+  result = http_request(host, port, path, config.method, config.user_agent,
+                        config.timeout, config.headers, config.header_count,
+                        config.basic_auth);
 #endif
 
-  return success ? EXIT_SUCCESS_CODE : EXIT_FAILURE_CODE;
+  return (result == REQUEST_SUCCESS) ? EXIT_SUCCESS_CODE : EXIT_FAILURE_CODE;
 }

@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
-Functional tests for httpcheck application.
+Functional tests for http(s)check application.
 
-This test suite validates the httpcheck binary by:
+This test suite validates the http(s)check binary by:
 1. Starting a Python HTTP/HTTPS server on a random port
-2. Executing httpcheck with specific arguments/environment variables
+2. Executing http(s)check with specific arguments/environment variables
 3. Validating exit codes, HTTP headers, methods, and error messages
 
 The test suite includes:
 - Basic HTTP functionality tests
 - HTTPS functionality tests (when --https flag is used)
 - Protocol auto-detection tests (HTTPS only, for URLs without http:// or https://)
+- Port handling edge cases (explicit port preservation during fallback)
 
 Usage:
     python3 httpcheck.py [--bin PATH] [--https] [--cert-dir DIR]
@@ -1359,6 +1360,50 @@ def get_test_cases() -> List[TestCase]:
             give_env={"CHECK_PORT": "{PORT}"},
             want_exit_code=0,
             want_url_path="/health",
+            https_only=True,
+        ),
+
+        TestCase(
+            name="Auto-detect: Explicit port matching HTTPS default (443)",
+            give_args=["127.0.0.1:443/health"],
+            give_env={"CHECK_PORT": "{PORT}"},
+            want_exit_code=0,
+            want_url_path="/health",
+            https_only=True,
+        ),
+
+        TestCase(
+            name="Auto-detect: Explicit non-standard port",
+            give_args=["127.0.0.1:9999/health"],
+            give_env={"CHECK_PORT": "{PORT}"},
+            want_exit_code=0,
+            want_url_path="/health",
+            https_only=True,
+        ),
+
+        TestCase(
+            name="Auto-detect: Port override via flag",
+            give_args=["-p", "{PORT}", "127.0.0.1/health"],
+            want_exit_code=0,
+            want_url_path="/health",
+            https_only=True,
+        ),
+
+        TestCase(
+            name="Auto-detect: Port override via environment variable",
+            give_args=["127.0.0.1/health"],
+            give_env={"CHECK_PORT": "{PORT}"},
+            want_exit_code=0,
+            want_url_path="/health",
+            https_only=True,
+        ),
+
+        TestCase(
+            name="Auto-detect: Custom port with custom path",
+            give_args=["127.0.0.1:8443/api/v1/health"],
+            give_env={"CHECK_PORT": "{PORT}"},
+            want_exit_code=0,
+            want_url_path="/api/v1/health",
             https_only=True,
         ),
     ]
