@@ -317,7 +317,9 @@ static void print_help(void) {
 #endif
   fprintf(stderr, "  %s " HTTP_SCHEME "127.0.0.1\n", APP_NAME);
 #ifdef WITH_TLS
-  fprintf(stderr, "  # Protocol auto-detection (tries HTTPS first, falls back to HTTP)\n");
+  fprintf(
+      stderr,
+      "  # Protocol auto-detection (tries HTTPS first, falls back to HTTP)\n");
   fprintf(stderr, "  %s 127.0.0.1:8080/health\n", APP_NAME);
 #endif
   fprintf(stderr, "\n");
@@ -430,7 +432,8 @@ static bool validate_header(const char *header) {
 /**
  * Parse and validate HTTP/HTTPS URL, extracting components.
  * When WITH_TLS is defined and protocol is omitted, protocol_mode is set to -1
- * to indicate auto-detection (try HTTPS first, fallback to HTTP on TLS failure).
+ * to indicate auto-detection (try HTTPS first, fallback to HTTP on TLS
+ * failure).
  *
  * protocol_mode values:
  *   0 = HTTP explicitly requested
@@ -472,7 +475,6 @@ static bool parse_url(const char *url, char *host, size_t host_size, int *port,
     return false;
   }
 #endif
-
 
   const char *slash = strchr(start, '/');
   const char *colon = strchr(start, ':');
@@ -1570,15 +1572,16 @@ int main(int argc, char *argv[]) {
                             config.basic_auth);
 
     if (!success) {
-      // If HTTPS failed, try HTTP with default HTTP port if no port was explicitly specified
-      // Only fallback if the port is still at HTTPS default (443)
+      // If HTTPS failed, try HTTP with default HTTP port if no port was
+      // explicitly specified Only fallback if the port is still at HTTPS
+      // default (443)
       if (port == HTTPS_DEFAULT_PORT && config.port_override == -1) {
         port = HTTP_DEFAULT_PORT;
       }
 
       success = http_request(host, port, path, config.method, config.user_agent,
-                             config.timeout, config.headers, config.header_count,
-                             config.basic_auth);
+                             config.timeout, config.headers,
+                             config.header_count, config.basic_auth);
     }
   }
 #else

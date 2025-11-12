@@ -15,16 +15,26 @@ minimal size and zero dependencies.
 A common use case is to include these tools in `HEALTHCHECK` instructions in Dockerfiles, allowing Docker to
 monitor the health of applications running inside containers. Typically, you
 [don't need them in Kubernetes][k8s-probes] (because Kubernetes has its own health check mechanisms, where the
-kubelet periodically checks the container’s status), but in vanilla Docker or other container runtimes without
+kubelet periodically checks the container's status), but in vanilla Docker or other container runtimes without
 built-in health checks, these tools can be very useful.
 
-You might say, "But why? There are already tools like `curl` or `wget`!". That’s true, but those tools are often
+You might say, "But why? There are already tools like `curl` or `wget`!". That's true, but those tools are often
 quite large because they include many features and dependencies. Using them only for health checks can
 unnecessarily increase the size of your Docker images. These tools are designed to be as small as possible
 while still providing the required functionality, especially for `scratch` or `distroless` images (`curl` and
-`wget` **won’t work there** at all, since they rely on shared libraries). In addition, their exit codes are
-designed to match Docker’s expectations for health checks (0 = healthy, 1 = unhealthy), whereas `curl` and
+`wget` **won't work there** at all, since they rely on shared libraries). In addition, their exit codes are
+designed to match Docker's expectations for health checks (0 = healthy, 1 = unhealthy), whereas `curl` and
 `wget` do not follow this convention.
+
+Just to illustrate the size difference, here is a comparison of adding `httpcheck` versus `curl` or `wget`:
+
+```
+COPY --from=... /bin/httpcheck  [▌--------------------------------------] 75Kb
+apk add wget                    [███████████████████--------------------] 3.3Mb // 44× larger
+apt install wget                [█████████████████████------------------] 4Mb   // 53× larger
+apk add curl                    [██████████████████████████-------------] 5.2Mb // 69× larger
+apt install curl                [███████████████████████████████████████] 9.3Mb // 124× larger
+```
 
 So, think of this as an alternative to:
 
