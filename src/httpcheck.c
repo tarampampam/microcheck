@@ -116,7 +116,7 @@ typedef struct {
   int port_override;          /* Override port from URL (-1 = not set) */
   const char *port_env;       /* Environment variable name for port override */
 #ifdef WITH_TLS
-  bool use_tls; /* Whether to use TLS/HTTPS */
+  int protocol_mode; /* Protocol mode: 0=HTTP, 1=HTTPS, -1=auto-detect */
 #endif
 } config_t;
 
@@ -315,7 +315,12 @@ static void print_help(void) {
 #ifdef WITH_TLS
   fprintf(stderr, "  %s " HTTPS_SCHEME "127.0.0.1\n", APP_NAME);
 #endif
-  fprintf(stderr, "  %s " HTTP_SCHEME "127.0.0.1\n\n", APP_NAME);
+  fprintf(stderr, "  %s " HTTP_SCHEME "127.0.0.1\n", APP_NAME);
+#ifdef WITH_TLS
+  fprintf(stderr, "  # Protocol auto-detection (tries HTTPS first, falls back to HTTP)\n");
+  fprintf(stderr, "  %s 127.0.0.1:8080/health\n", APP_NAME);
+#endif
+  fprintf(stderr, "\n");
 
   fprintf(stderr, "  # HEAD request to specific port\n");
   fprintf(stderr, "  %s -m HEAD " EXAMPLES_SCHEME "127.0.0.1:8080\n\n",
@@ -424,9 +429,16 @@ static bool validate_header(const char *header) {
 
 /**
  * Parse and validate HTTP/HTTPS URL, extracting components.
+ * When WITH_TLS is defined and protocol is omitted, protocol_mode is set to -1
+ * to indicate auto-detection (try HTTPS first, fallback to HTTP on TLS failure).
+ *
+ * protocol_mode values:
+ *   0 = HTTP explicitly requested
+ *   1 = HTTPS explicitly requested
+ *  -1 = auto-detect (try HTTPS first, then HTTP on TLS connection failure)
  */
 static bool parse_url(const char *url, char *host, size_t host_size, int *port,
-                      char *path, size_t path_size, bool *use_tls) {
+                      char *path, size_t path_size, int *protocol_mode) {
   const char *start;
   int default_port;
 
@@ -435,28 +447,32 @@ static bool parse_url(const char *url, char *host, size_t host_size, int *port,
   if (strncmp(url, HTTPS_SCHEME, HTTPS_SCHEME_LEN) == 0) {
     start = url + HTTPS_SCHEME_LEN;
     default_port = HTTPS_DEFAULT_PORT;
-    *use_tls = true;
-  } else
+    *protocol_mode = 1; // explicit HTTPS
+  } else if (strncmp(url, HTTP_SCHEME, HTTP_SCHEME_LEN) == 0) {
+    // Check for HTTP scheme
+    start = url + HTTP_SCHEME_LEN;
+    default_port = HTTP_DEFAULT_PORT;
+    *protocol_mode = 0; // explicit HTTP
+  } else {
+    // No protocol specified - auto-detect (try HTTPS first, then HTTP)
+    start = url;
+    default_port = HTTPS_DEFAULT_PORT;
+    *protocol_mode = -1; // auto-detect
+  }
 #else
   // Suppress unused parameter warning when TLS is not enabled
-  (void)use_tls;
-#endif
-    // Check for HTTP scheme
-    if (strncmp(url, HTTP_SCHEME, HTTP_SCHEME_LEN) == 0) {
-      start = url + HTTP_SCHEME_LEN;
-      default_port = HTTP_DEFAULT_PORT;
-#ifdef WITH_TLS
-      *use_tls = false;
-#endif
-    } else {
-#ifdef WITH_TLS
-      fprintf(stderr, "Error: URL must start with %s or %s\n", HTTP_SCHEME,
-              HTTPS_SCHEME);
-#else
+  (void)protocol_mode;
+
+  // Check for HTTP scheme
+  if (strncmp(url, HTTP_SCHEME, HTTP_SCHEME_LEN) == 0) {
+    start = url + HTTP_SCHEME_LEN;
+    default_port = HTTP_DEFAULT_PORT;
+  } else {
     fprintf(stderr, "Error: URL must start with %s\n", HTTP_SCHEME);
+    return false;
+  }
 #endif
-      return false;
-    }
+
 
   const char *slash = strchr(start, '/');
   const char *colon = strchr(start, ':');
@@ -1291,7 +1307,7 @@ int main(int argc, char *argv[]) {
                      .port_env = DEFAULT_PORT_ENV
 #ifdef WITH_TLS
                      ,
-                     .use_tls = false
+                     .protocol_mode = 0
 #endif
   };
 
@@ -1497,18 +1513,18 @@ int main(int argc, char *argv[]) {
   char host[MAX_HOSTNAME_LEN];
   int port;
   char path[MAX_PATH_LEN];
-  bool use_tls = false;
+  int protocol_mode = 0;
 
   if (!parse_url(config.url, host, sizeof(host), &port, path, sizeof(path),
-                 &use_tls)) {
+                 &protocol_mode)) {
     return EXIT_FAILURE_CODE;
   }
 
 #ifdef WITH_TLS
-  config.use_tls = use_tls;
+  config.protocol_mode = protocol_mode;
 #else
   // If TLS is requested but not supported, error out
-  if (use_tls) {
+  if (protocol_mode != 0) {
     fprintf(stderr, "Error: HTTPS not supported in this build\n");
     fprintf(stderr, "Use the httpscheck binary for HTTPS support\n");
     return EXIT_FAILURE_CODE;
@@ -1537,14 +1553,33 @@ int main(int argc, char *argv[]) {
   bool success;
 
 #ifdef WITH_TLS
-  if (config.use_tls) {
+  if (config.protocol_mode == 1) {
+    // Explicit HTTPS
     success = https_request(host, port, path, config.method, config.user_agent,
                             config.timeout, config.headers, config.header_count,
                             config.basic_auth);
-  } else {
+  } else if (config.protocol_mode == 0) {
+    // Explicit HTTP
     success = http_request(host, port, path, config.method, config.user_agent,
                            config.timeout, config.headers, config.header_count,
                            config.basic_auth);
+  } else {
+    // Auto-detect: try HTTPS first, fallback to HTTP on TLS connection failure
+    success = https_request(host, port, path, config.method, config.user_agent,
+                            config.timeout, config.headers, config.header_count,
+                            config.basic_auth);
+
+    if (!success) {
+      // If HTTPS failed, try HTTP with default HTTP port if no port was explicitly specified
+      // Only fallback if the port is still at HTTPS default (443)
+      if (port == HTTPS_DEFAULT_PORT && config.port_override == -1) {
+        port = HTTP_DEFAULT_PORT;
+      }
+
+      success = http_request(host, port, path, config.method, config.user_agent,
+                             config.timeout, config.headers, config.header_count,
+                             config.basic_auth);
+    }
   }
 #else
   success = http_request(host, port, path, config.method, config.user_agent,

@@ -18,7 +18,7 @@ monitor the health of applications running inside containers. Typically, you
 kubelet periodically checks the container’s status), but in vanilla Docker or other container runtimes without
 built-in health checks, these tools can be very useful.
 
-You might say, "But why? There are already tools like `curl` or `wget`!" That’s true, but those tools are often
+You might say, "But why? There are already tools like `curl` or `wget`!". That’s true, but those tools are often
 quite large because they include many features and dependencies. Using them only for health checks can
 unnecessarily increase the size of your Docker images. These tools are designed to be as small as possible
 while still providing the required functionality, especially for `scratch` or `distroless` images (`curl` and
@@ -54,6 +54,7 @@ So, think of this as an alternative to:
 * **Distributed** as single binaries (see the releases page) and Docker images
 * **Minimal size**: Optimized for small Docker images
 * **TLS support**: Uses `mbedTLS` for HTTPS (accepts self-signed certificates and does NOT verify SSL/TLS certificates)
+* **Protocol auto-detection** (`httpscheck` only): Automatically tries HTTPS first, falls back to HTTP on TLS errors
 * **Flexible configuration**: Command-line flags and environment variables
 * **Docker-friendly**: Handles signals (`SIGTERM`, `SIGINT`) gracefully
 
@@ -71,6 +72,11 @@ Those tools perform HTTP health checks. `httpscheck` includes TLS support, while
 the binary file size. Both tools share the same command-line interface, and even compile from the same source
 code (but with different build flags).
 
+> [!NOTE]
+> `httpscheck` supports **protocol auto-detection**: when no protocol (`http://` or `https://`) is specified in the URL,
+> it will first attempt an HTTPS connection. If the HTTPS connection fails (TLS handshake error), it will automatically
+> fall back to HTTP. This is useful for applications that may have TLS enabled or disabled based on configuration.
+
 ```
 Options:
   -h, --help               Show this help message
@@ -87,6 +93,19 @@ Options:
       --basic-auth-env     Change env variable name for --basic-auth (current: CHECK_BASIC_AUTH)
   -t, --timeout            Request timeout in seconds (env: CHECK_TIMEOUT) (default: 5)
       --timeout-env        Change env variable name for --timeout (current: CHECK_TIMEOUT)
+```
+
+**URL Format Examples:**
+
+```shell
+# Explicit HTTP
+httpscheck http://localhost:8080/health
+
+# Explicit HTTPS
+httpscheck https://localhost:8080/health
+
+# Auto-detect (httpscheck only): tries HTTPS first, falls back to HTTP on TLS error
+httpscheck localhost:8080/health
 ```
 
 ### `portcheck`
@@ -198,6 +217,44 @@ $ docker kill http-check
 </details>
 
 <details>
+  <summary><strong>🚀 Healthcheck with protocol auto-detection</strong></summary>
+
+This example demonstrates the protocol auto-detection feature of `httpscheck`, which is useful when your application
+may have TLS enabled or disabled based on configuration:
+
+```Dockerfile
+# use empty filesystem
+FROM scratch
+
+# import your application (example assumes it can run with or without TLS)
+COPY --from=your-app:latest /app /app
+
+# import httpscheck to enable auto-detection
+COPY --from=ghcr.io/tarampampam/microcheck /bin/httpscheck /bin/httpscheck
+
+# healthcheck will try HTTPS first, fall back to HTTP if TLS is not available
+# note: no http:// or https:// prefix in the URL
+HEALTHCHECK --interval=5s --retries=2 CMD ["httpscheck", "127.0.0.1:8080/health"]
+
+ENTRYPOINT ["/app"]
+```
+
+**How it works:**
+
+1. When no protocol is specified (`127.0.0.1:8080/health` instead of `https://...`), `httpscheck`
+   first attempts an HTTPS connection
+2. If the HTTPS handshake fails (TLS error), it automatically falls back to HTTP
+3. This happens silently without any output, making it transparent for health checks
+4. The fallback only occurs on connection/TLS errors, not on HTTP status codes (`4xx`, `5xx`)
+
+This is particularly useful for:
+- Applications with optional TLS configuration
+- Development vs production environments
+- Gradual TLS rollouts
+
+</details>
+
+<details>
   <summary><strong>🚀 Healthcheck for TCP server</strong></summary>
 
 The same as previous, but using `portcheck`:
@@ -239,6 +296,7 @@ To build the tools from source, ensure you have the following dependencies insta
 * `wget`
 * `patch`
 * Standard build tools (`make`, `tar`)
+* Optionally - `clang-format`
 
 After cloning the repository, build the tools using the `Makefile` - execute `make`.
 
