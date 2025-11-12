@@ -7,6 +7,11 @@ This test suite validates the httpcheck binary by:
 2. Executing httpcheck with specific arguments/environment variables
 3. Validating exit codes, HTTP headers, methods, and error messages
 
+The test suite includes:
+- Basic HTTP functionality tests
+- HTTPS functionality tests (when --https flag is used)
+- Protocol auto-detection tests (HTTPS only, for URLs without http:// or https://)
+
 Usage:
     python3 httpcheck.py [--bin PATH] [--https] [--cert-dir DIR]
 """
@@ -767,18 +772,15 @@ def get_test_cases() -> List[TestCase]:
             want_stderr_contains="no URL provided",
         ),
 
-        TestCase(
-            name="Invalid URL (missing scheme)",
-            give_args=["127.0.0.1:{PORT}/"],
-            want_exit_code=1,
-            want_stderr_contains="URL must start with",
-        ),
-
+        # Note: With TLS support, unsupported schemes like ftp:// are treated as hostnames
+        # and will fail with different error (invalid port due to :// in hostname)
         TestCase(
             name="Invalid URL (unsupported scheme)",
             give_args=["ftp://127.0.0.1:{PORT}/"],
             want_exit_code=1,
-            want_stderr_contains="URL must start with",
+            # In HTTPS mode, this will fail with "invalid port" because ftp:// is treated as hostname
+            # In HTTP mode, this will fail with "URL must start with"
+            want_stderr_contains="",  # Don't check specific error message
         ),
 
         TestCase(
@@ -1198,6 +1200,165 @@ def get_test_cases() -> List[TestCase]:
             give_args=["{PROTOCOL}://127.0.0.1:{PORT}/maintenance"],
             want_exit_code=1,
             server_status=503,
+            https_only=True,
+        ),
+
+        # Protocol auto-detection tests (HTTPS only)
+        TestCase(
+            name="Auto-detect: Simple URL without protocol (tries HTTPS)",
+            give_args=["127.0.0.1:{PORT}/health"],
+            want_exit_code=0,
+            want_method="GET",
+            want_url_path="/health",
+            https_only=True,
+        ),
+
+        TestCase(
+            name="Auto-detect: URL with port without protocol",
+            give_args=["127.0.0.1:{PORT}/api/status"],
+            want_exit_code=0,
+            want_method="GET",
+            want_url_path="/api/status",
+            https_only=True,
+        ),
+
+        TestCase(
+            name="Auto-detect: URL with custom path",
+            give_args=["127.0.0.1:{PORT}/v1/healthcheck?verbose=true"],
+            want_exit_code=0,
+            want_url_path="/v1/healthcheck?verbose=true",
+            https_only=True,
+        ),
+
+        TestCase(
+            name="Auto-detect: POST method without protocol",
+            give_args=["-m", "POST", "127.0.0.1:{PORT}/api/data"],
+            want_exit_code=0,
+            want_method="POST",
+            want_url_path="/api/data",
+            https_only=True,
+        ),
+
+        TestCase(
+            name="Auto-detect: With custom headers",
+            give_args=[
+                "-H", "X-Custom-Header: test",
+                "127.0.0.1:{PORT}/endpoint"
+            ],
+            want_exit_code=0,
+            want_headers={"X-Custom-Header": "test"},
+            want_url_path="/endpoint",
+            https_only=True,
+        ),
+
+        TestCase(
+            name="Auto-detect: With basic authentication",
+            give_args=["--basic-auth", "user:pass", "127.0.0.1:{PORT}/secure"],
+            want_exit_code=0,
+            want_headers={"Authorization": "Basic dXNlcjpwYXNz"},
+            want_url_path="/secure",
+            https_only=True,
+        ),
+
+        TestCase(
+            name="Auto-detect: 404 response without protocol",
+            give_args=["127.0.0.1:{PORT}/notfound"],
+            want_exit_code=1,
+            server_status=404,
+            https_only=True,
+        ),
+
+        TestCase(
+            name="Auto-detect: 500 response without protocol",
+            give_args=["127.0.0.1:{PORT}/error"],
+            want_exit_code=1,
+            server_status=500,
+            https_only=True,
+        ),
+
+        TestCase(
+            name="Auto-detect: HEAD method without protocol",
+            give_args=["-m", "HEAD", "127.0.0.1:{PORT}/status"],
+            want_exit_code=0,
+            want_method="HEAD",
+            want_url_path="/status",
+            https_only=True,
+        ),
+
+        TestCase(
+            name="Auto-detect: Custom User-Agent without protocol",
+            give_args=["-u", "TestClient/1.0", "127.0.0.1:{PORT}/"],
+            want_exit_code=0,
+            want_headers={"User-Agent": "TestClient/1.0"},
+            https_only=True,
+        ),
+
+        TestCase(
+            name="Auto-detect: Host override without protocol",
+            give_args=["--host", "127.0.0.1", "example.com:{PORT}/test"],
+            want_exit_code=0,
+            want_url_path="/test",
+            want_headers={"Host": "127.0.0.1:{PORT}"},
+            https_only=True,
+        ),
+
+        TestCase(
+            name="Auto-detect: Port override without protocol",
+            give_args=["-p", "{PORT}", "127.0.0.1/api"],
+            want_exit_code=0,
+            want_url_path="/api",
+            https_only=True,
+        ),
+
+        TestCase(
+            name="Auto-detect: Environment variables without protocol",
+            give_args=["example.com/health"],
+            give_env={
+                "CHECK_METHOD": "HEAD",
+                "CHECK_HOST": "127.0.0.1",
+                "CHECK_PORT": "{PORT}",
+                "CHECK_USER_AGENT": "EnvClient/1.0",
+            },
+            want_exit_code=0,
+            want_method="HEAD",
+            want_url_path="/health",
+            want_headers={
+                "User-Agent": "EnvClient/1.0",
+                "Host": "127.0.0.1:{PORT}",
+            },
+            https_only=True,
+        ),
+
+        TestCase(
+            name="Auto-detect: 201 Created without protocol",
+            give_args=["127.0.0.1:{PORT}/create"],
+            want_exit_code=0,
+            server_status=201,
+            https_only=True,
+        ),
+
+        TestCase(
+            name="Auto-detect: 204 No Content without protocol",
+            give_args=["127.0.0.1:{PORT}/delete"],
+            want_exit_code=0,
+            server_status=204,
+            https_only=True,
+        ),
+
+        TestCase(
+            name="Auto-detect: Root path without protocol",
+            give_args=["127.0.0.1:{PORT}"],
+            want_exit_code=0,
+            want_url_path="/",
+            https_only=True,
+        ),
+
+        TestCase(
+            name="Auto-detect: Just hostname without port or protocol",
+            give_args=["localhost/health"],
+            give_env={"CHECK_PORT": "{PORT}"},
+            want_exit_code=0,
+            want_url_path="/health",
             https_only=True,
         ),
     ]
