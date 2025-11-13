@@ -312,15 +312,32 @@ static bool resolve_host(const char *host, struct in_addr *addr) {
     return true;
   }
 
-  // resolve as hostname
-  struct hostent *he = gethostbyname(host);
-  if (he == NULL || he->h_addrtype != AF_INET || he->h_length != 4) {
+  // resolve as hostname using getaddrinfo (thread-safe and modern)
+  struct addrinfo hints;
+  struct addrinfo *result_addr = NULL;
+
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_INET;       // IPv4
+  hints.ai_socktype = SOCK_STREAM; // TCP
+
+  int gai_result = getaddrinfo(host, NULL, &hints, &result_addr);
+
+  if (gai_result != 0) {
     fprintf(stderr, "Error: failed to resolve host '%s': %s\n", host,
-            hstrerror(h_errno));
+            gai_strerror(gai_result));
     return false;
   }
 
-  memcpy(addr, he->h_addr_list[0], 4);
+  if (result_addr == NULL) {
+    fprintf(stderr, "Error: no address found for host '%s'\n", host);
+    return false;
+  }
+
+  // extract IPv4 address from result
+  struct sockaddr_in *ipv4 = (struct sockaddr_in *)result_addr->ai_addr;
+  memcpy(addr, &ipv4->sin_addr, sizeof(*addr));
+
+  freeaddrinfo(result_addr);
   return true;
 }
 
