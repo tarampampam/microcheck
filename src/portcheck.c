@@ -260,7 +260,7 @@ static bool parse_timeout(const char *str, int *timeout) {
 /**
  * Check if argument matches a short or long option.
  */
-static bool matches_option(const char *arg, const option_def_t *opt) {
+static inline bool matches_option(const char *arg, const option_def_t *opt) {
   if (opt->short_flag != NULL && strcmp(arg, opt->short_flag) == 0) {
     return true;
   }
@@ -273,7 +273,8 @@ static bool matches_option(const char *arg, const option_def_t *opt) {
 /**
  * Check if argument matches an environment variable override option.
  */
-static bool matches_env_option(const char *arg, const env_option_def_t *opt) {
+static inline bool matches_env_option(const char *arg,
+                                      const env_option_def_t *opt) {
   return strcmp(arg, opt->long_flag) == 0;
 }
 

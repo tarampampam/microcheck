@@ -1189,14 +1189,15 @@ cleanup:
 /**
  * Check if argument matches environment option flag.
  */
-static bool matches_env_option(const char *arg, const env_option_def_t *opt) {
+static inline bool matches_env_option(const char *arg,
+                                      const env_option_def_t *opt) {
   return opt->long_flag != NULL && strcmp(arg, opt->long_flag) == 0;
 }
 
 /**
  * Check if argument matches short or long option flag.
  */
-static bool matches_option(const char *arg, const option_def_t *opt) {
+static inline bool matches_option(const char *arg, const option_def_t *opt) {
   if (opt->short_flag != NULL && strcmp(arg, opt->short_flag) == 0) {
     return true;
   }
