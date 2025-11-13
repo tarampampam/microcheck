@@ -514,7 +514,7 @@ static bool check_udp_port(const char *host, int port, int timeout_sec) {
     return false;
   }
 
-  // send probe with actual data (not empty packet)
+  // send nearly empty probe datagram (1 byte)
   char probe[1] = {0};
   ssize_t sent = send(sockfd, probe, sizeof(probe), 0);
   if (sent < 0) {
