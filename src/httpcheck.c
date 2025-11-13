@@ -379,8 +379,8 @@ static void print_help(void) {
  * Simple implementation without external dependencies.
  */
 static bool base64_encode(const char *input, char *output, size_t out_size) {
-  size_t input_len = strlen(input);
-  size_t output_len = ((input_len + 2) / 3) * 4;
+  const size_t input_len = strlen(input);
+  const size_t output_len = ((input_len + 2) / 3) * 4;
 
   if (output_len + 1 > out_size) {
     return false;
@@ -388,13 +388,15 @@ static bool base64_encode(const char *input, char *output, size_t out_size) {
 
   size_t i = 0;
   size_t j = 0;
+  const size_t full_groups = input_len / 3;
 
-  while (i < input_len) {
-    uint32_t octet_a = i < input_len ? (unsigned char)input[i++] : 0;
-    uint32_t octet_b = i < input_len ? (unsigned char)input[i++] : 0;
-    uint32_t octet_c = i < input_len ? (unsigned char)input[i++] : 0;
+  // process complete 3-byte groups
+  for (size_t g = 0; g < full_groups; g++) {
+    const uint32_t octet_a = (unsigned char)input[i++];
+    const uint32_t octet_b = (unsigned char)input[i++];
+    const uint32_t octet_c = (unsigned char)input[i++];
 
-    uint32_t triple = (octet_a << 16) + (octet_b << 8) + octet_c;
+    const uint32_t triple = (octet_a << 16) | (octet_b << 8) | octet_c;
 
     output[j++] = BASE64_CHARS[(triple >> 18) & 0x3F];
     output[j++] = BASE64_CHARS[(triple >> 12) & 0x3F];
@@ -402,13 +404,20 @@ static bool base64_encode(const char *input, char *output, size_t out_size) {
     output[j++] = BASE64_CHARS[triple & 0x3F];
   }
 
-  // add padding
-  size_t padding = (3 - (input_len % 3)) % 3;
-  for (size_t k = 0; k < padding; k++) {
-    output[output_len - 1 - k] = '=';
+  // handle remaining bytes (0, 1, or 2 bytes)
+  const size_t remaining = input_len % 3;
+  if (remaining > 0) {
+    const uint32_t octet_a = (unsigned char)input[i++];
+    const uint32_t octet_b = remaining > 1 ? (unsigned char)input[i++] : 0;
+    const uint32_t triple = (octet_a << 16) | (octet_b << 8);
+
+    output[j++] = BASE64_CHARS[(triple >> 18) & 0x3F];
+    output[j++] = BASE64_CHARS[(triple >> 12) & 0x3F];
+    output[j++] = remaining > 1 ? BASE64_CHARS[(triple >> 6) & 0x3F] : '=';
+    output[j++] = '=';
   }
 
-  output[output_len] = '\0';
+  output[j] = '\0';
 
   return true;
 }
@@ -601,15 +610,93 @@ static bool set_socket_timeout(int sockfd, int timeout) {
 /**
  * Check if HTTP status code is in success range (2xx).
  */
-static bool is_success_status(long status) {
+static inline bool is_success_status(long status) {
   return status >= HTTP_STATUS_SUCCESS_MIN && status <= HTTP_STATUS_SUCCESS_MAX;
 }
 
 /**
  * Check if HTTP status code is valid.
  */
-static bool is_valid_status(long status) {
+static inline bool is_valid_status(long status) {
   return status >= HTTP_STATUS_MIN && status <= HTTP_STATUS_MAX;
+}
+
+/**
+ * Build HTTP request string with headers.
+ * Returns the length of the request on success, -1 on error.
+ * This helper reduces code duplication between http_request and https_request.
+ */
+static int build_http_request(char *request, size_t request_size,
+                              const char *method, const char *path,
+                              const char *host, int port, int default_port,
+                              const char *user_agent, const char *basic_auth,
+                              const char **headers, int header_count) {
+  // prepare host with port if non-standard
+  char host_with_port[MAX_HOSTNAME_LEN + 10]; // +10 for ":65535\0"
+
+  if (port == default_port) {
+    snprintf(host_with_port, sizeof(host_with_port), "%s", host);
+  } else {
+    snprintf(host_with_port, sizeof(host_with_port), "%s:%d", host, port);
+  }
+
+  // build request line and mandatory headers
+  int req_len =
+      snprintf(request, request_size,
+               "%s %s %s\r\n"
+               "Host: %s\r\n"
+               "User-Agent: %s\r\n",
+               method, path, HTTP_VERSION, host_with_port, user_agent);
+
+  if (req_len < 0 || (size_t)req_len >= request_size) {
+    fprintf(stderr, "Error: HTTP request too long\n");
+    return -1;
+  }
+
+  // add Basic Authentication header if provided
+  if (basic_auth != NULL) {
+    char auth_encoded[MAX_BASE64_AUTH_LEN];
+    if (!base64_encode(basic_auth, auth_encoded, sizeof(auth_encoded))) {
+      fprintf(stderr, "Error: basic auth credentials too long\n");
+      return -1;
+    }
+
+    int auth_len =
+        snprintf(request + req_len, request_size - (size_t)req_len,
+                 "Authorization: Basic %s\r\n", auth_encoded);
+
+    if (auth_len < 0 || (size_t)req_len + (size_t)auth_len >= request_size) {
+      fprintf(stderr, "Error: HTTP request too long (with auth header)\n");
+      return -1;
+    }
+
+    req_len += auth_len;
+  }
+
+  // add custom headers
+  for (int i = 0; i < header_count; i++) {
+    int hdr_len = snprintf(request + req_len, request_size - (size_t)req_len,
+                           "%s\r\n", headers[i]);
+
+    if (hdr_len < 0 || (size_t)req_len + (size_t)hdr_len >= request_size) {
+      fprintf(stderr, "Error: HTTP request too long (with custom headers)\n");
+      return -1;
+    }
+
+    req_len += hdr_len;
+  }
+
+  // add Connection header and final CRLF
+  int final_len = snprintf(request + req_len, request_size - (size_t)req_len,
+                           "Connection: close\r\n\r\n");
+
+  if (final_len < 0 || (size_t)req_len + (size_t)final_len >= request_size) {
+    fprintf(stderr, "Error: HTTP request too long\n");
+    return -1;
+  }
+
+  req_len += final_len;
+  return req_len;
 }
 
 #ifdef WITH_TLS
@@ -725,71 +812,13 @@ static request_result_t https_request(const char *host, int port,
 
   // Build HTTP request
   char request[BUFFER_SIZE];
+  int req_len = build_http_request(request, sizeof(request), method, path, host,
+                                    port, HTTPS_DEFAULT_PORT, user_agent,
+                                    basic_auth, headers, header_count);
 
-  // Before building the request, prepare host with port if needed
-  char host_with_port[MAX_HOSTNAME_LEN + 10]; // +10 for ":65535\0"
-
-  if (port == HTTPS_DEFAULT_PORT) {
-    snprintf(host_with_port, sizeof(host_with_port), "%s", host);
-  } else {
-    snprintf(host_with_port, sizeof(host_with_port), "%s:%d", host, port);
-  }
-
-  int req_len =
-      snprintf(request, sizeof(request),
-               "%s %s %s\r\n"
-               "Host: %s\r\n"
-               "User-Agent: %s\r\n",
-               method, path, HTTP_VERSION, host_with_port, user_agent);
-
-  if (req_len < 0 || (size_t)req_len >= sizeof(request)) {
-    fprintf(stderr, "Error: HTTP request too long\n");
+  if (req_len < 0) {
     goto cleanup;
   }
-
-  // Add Basic Authentication header if provided
-  if (basic_auth != NULL) {
-    char auth_encoded[MAX_BASE64_AUTH_LEN];
-    if (!base64_encode(basic_auth, auth_encoded, sizeof(auth_encoded))) {
-      fprintf(stderr, "Error: basic auth credentials too long\n");
-      goto cleanup;
-    }
-
-    int auth_len =
-        snprintf(request + req_len, sizeof(request) - (size_t)req_len,
-                 "Authorization: Basic %s\r\n", auth_encoded);
-
-    if (auth_len < 0 || (size_t)req_len + (size_t)auth_len >= sizeof(request)) {
-      fprintf(stderr, "Error: HTTP request too long (with auth header)\n");
-      goto cleanup;
-    }
-
-    req_len += auth_len;
-  }
-
-  // Add custom headers
-  for (int i = 0; i < header_count; i++) {
-    int hdr_len = snprintf(request + req_len, sizeof(request) - (size_t)req_len,
-                           "%s\r\n", headers[i]);
-
-    if (hdr_len < 0 || (size_t)req_len + (size_t)hdr_len >= sizeof(request)) {
-      fprintf(stderr, "Error: HTTP request too long (with custom headers)\n");
-      goto cleanup;
-    }
-
-    req_len += hdr_len;
-  }
-
-  // Add Connection header and final CRLF
-  int final_len = snprintf(request + req_len, sizeof(request) - (size_t)req_len,
-                           "Connection: close\r\n\r\n");
-
-  if (final_len < 0 || (size_t)req_len + (size_t)final_len >= sizeof(request)) {
-    fprintf(stderr, "Error: HTTP request too long\n");
-    goto cleanup;
-  }
-
-  req_len += final_len;
 
   // Send HTTP request over SSL
   size_t total_written = 0;
@@ -1041,77 +1070,13 @@ static request_result_t http_request(const char *host, int port,
 
   // build HTTP request - using HTTP/1.1 with Connection: close for simplicity
   char request[BUFFER_SIZE];
+  int req_len = build_http_request(request, sizeof(request), method, path, host,
+                                    port, HTTP_DEFAULT_PORT, user_agent,
+                                    basic_auth, headers, header_count);
 
-  // Before building the request, prepare host with port if needed
-  char host_with_port[MAX_HOSTNAME_LEN + 10]; // +10 for ":65535\0"
-
-  if (port == HTTP_DEFAULT_PORT) {
-    snprintf(host_with_port, sizeof(host_with_port), "%s", host);
-  } else {
-    snprintf(host_with_port, sizeof(host_with_port), "%s:%d", host, port);
-  }
-
-  int req_len =
-      snprintf(request, sizeof(request),
-               "%s %s %s\r\n"
-               "Host: %s\r\n"
-               "User-Agent: %s\r\n",
-               method, path, HTTP_VERSION, host_with_port, user_agent);
-
-  // check for snprintf overflow or error
-  if (req_len < 0 || (size_t)req_len >= sizeof(request)) {
-    fprintf(stderr, "Error: HTTP request too long\n");
-
+  if (req_len < 0) {
     goto cleanup;
   }
-
-  // add Basic Authentication header if provided
-  if (basic_auth != NULL) {
-    char auth_encoded[MAX_BASE64_AUTH_LEN];
-    if (!base64_encode(basic_auth, auth_encoded, sizeof(auth_encoded))) {
-      fprintf(stderr, "Error: basic auth credentials too long\n");
-
-      goto cleanup;
-    }
-
-    int auth_len =
-        snprintf(request + req_len, sizeof(request) - (size_t)req_len,
-                 "Authorization: Basic %s\r\n", auth_encoded);
-
-    if (auth_len < 0 || (size_t)req_len + (size_t)auth_len >= sizeof(request)) {
-      fprintf(stderr, "Error: HTTP request too long (with auth header)\n");
-
-      goto cleanup;
-    }
-
-    req_len += auth_len;
-  }
-
-  // add custom headers
-  for (int i = 0; i < header_count; i++) {
-    int hdr_len = snprintf(request + req_len, sizeof(request) - (size_t)req_len,
-                           "%s\r\n", headers[i]);
-
-    if (hdr_len < 0 || (size_t)req_len + (size_t)hdr_len >= sizeof(request)) {
-      fprintf(stderr, "Error: HTTP request too long (with custom headers)\n");
-
-      goto cleanup;
-    }
-
-    req_len += hdr_len;
-  }
-
-  // add Connection header and final CRLF
-  int final_len = snprintf(request + req_len, sizeof(request) - (size_t)req_len,
-                           "Connection: close\r\n\r\n");
-
-  if (final_len < 0 || (size_t)req_len + (size_t)final_len >= sizeof(request)) {
-    fprintf(stderr, "Error: HTTP request too long\n");
-
-    goto cleanup;
-  }
-
-  req_len += final_len;
 
   // send HTTP request
   ssize_t sent = send(sockfd, request, (size_t)req_len, 0);
@@ -1224,14 +1189,15 @@ cleanup:
 /**
  * Check if argument matches environment option flag.
  */
-static bool matches_env_option(const char *arg, const env_option_def_t *opt) {
+static inline bool matches_env_option(const char *arg,
+                                      const env_option_def_t *opt) {
   return opt->long_flag != NULL && strcmp(arg, opt->long_flag) == 0;
 }
 
 /**
  * Check if argument matches short or long option flag.
  */
-static bool matches_option(const char *arg, const option_def_t *opt) {
+static inline bool matches_option(const char *arg, const option_def_t *opt) {
   if (opt->short_flag != NULL && strcmp(arg, opt->short_flag) == 0) {
     return true;
   }
