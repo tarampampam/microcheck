@@ -431,7 +431,7 @@ services:
 </details>
 
 <details>
-  <summary><strong>🧪 Adminer (phpMyAdmin)</strong></summary>
+  <summary><strong>🧪 Adminer (phpMinAdmin)</strong></summary>
 
 > Adminer (formerly phpMinAdmin) is a full-featured database management tool written in PHP.
 
