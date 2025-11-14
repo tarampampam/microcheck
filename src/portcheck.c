@@ -342,6 +342,11 @@ static bool resolve_host(const char *host, struct in_addr *addr) {
     return false;
   }
 
+  if (result_addr->ai_addr == NULL) {
+    fprintf(stderr, "Error: address structure is NULL\n");
+    freeaddrinfo(result_addr);
+    return false;
+  }
   struct sockaddr_in *ipv4 = (struct sockaddr_in *)result_addr->ai_addr;
   memcpy(addr, &ipv4->sin_addr, sizeof(*addr));
 
