@@ -1591,7 +1591,7 @@ def get_test_cases() -> List[TestCase]:
         ),
 
         TestCase(
-            name="Security: Basic auth credentials at max length",
+            name="Security: Basic auth credentials exceed max length rejected",
             give_args=[
                 "--basic-auth", "user" * 50 + ":" + "pass" * 50,
                 "{PROTOCOL}://127.0.0.1:{PORT}/"
