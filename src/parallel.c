@@ -471,7 +471,7 @@ static bool add_running_job(pid_t pid, pid_t pgid, int cmd_index) {
         running_jobs_capacity == 0 ? 16 : running_jobs_capacity * 2;
 
     /* Check for integer overflow in capacity calculation */
-    if (new_capacity < running_jobs_capacity) {
+    if (new_capacity > INT_MAX / 2 || new_capacity < running_jobs_capacity) {
       fprintf(stderr, "Error: job tracking capacity overflow\n");
       return false;
     }

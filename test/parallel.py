@@ -157,6 +157,7 @@ def run_test(binary: str, test: TestCase) -> TestResult:
         return TestResult(True, duration=duration)
 
     except subprocess.TimeoutExpired:
+        duration = time.time() - start_time
         return TestResult(
             False,
             f"Test timed out after {duration:.2f}s"
