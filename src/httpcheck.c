@@ -1158,6 +1158,11 @@ static request_result_t http_request(const char *host, int port,
     goto cleanup;
   }
 
+  if (result_addr->ai_addr == NULL) {
+    fprintf(stderr, "Error: address structure is NULL\n");
+    freeaddrinfo(result_addr);
+    goto cleanup;
+  }
   memcpy(&serv_addr, result_addr->ai_addr, result_addr->ai_addrlen);
 
   // free getaddrinfo result
