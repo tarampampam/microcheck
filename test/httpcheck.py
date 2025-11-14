@@ -1406,6 +1406,234 @@ def get_test_cases() -> List[TestCase]:
             want_url_path="/api/v1/health",
             https_only=True,
         ),
+
+        TestCase(
+            name="Security: CRLF injection in path rejected",
+            give_args=["{PROTOCOL}://127.0.0.1:{PORT}/test\r\nInjected: header"],
+            want_exit_code=1,
+            want_stderr_contains="path contains invalid characters",
+        ),
+
+        TestCase(
+            name="Security: CRLF injection in hostname rejected",
+            give_args=["{PROTOCOL}://test\r\nhost.com:{PORT}/"],
+            want_exit_code=1,
+            want_stderr_contains="hostname contains invalid characters",
+        ),
+
+        TestCase(
+            name="Security: CRLF injection in custom header rejected",
+            give_args=["-H", "X-Header: value\r\nInjected: header", "{PROTOCOL}://127.0.0.1:{PORT}/"],
+            want_exit_code=1,
+            want_stderr_contains="invalid header format",
+        ),
+
+        TestCase(
+            name="Security: CRLF injection in method rejected",
+            give_args=["-m", "GET\r\nInjected: header", "{PROTOCOL}://127.0.0.1:{PORT}/"],
+            want_exit_code=1,
+            want_stderr_contains="method contains invalid characters",
+        ),
+
+        TestCase(
+            name="Security: CRLF injection in user-agent rejected",
+            give_args=["-u", "MyAgent\r\nInjected: header", "{PROTOCOL}://127.0.0.1:{PORT}/"],
+            want_exit_code=1,
+            want_stderr_contains="user-agent contains invalid characters",
+        ),
+
+        TestCase(
+            name="Security: CRLF injection in method from environment rejected",
+            give_args=["{PROTOCOL}://127.0.0.1:{PORT}/"],
+            give_env={"CHECK_METHOD": "GET\r\nInjected: header"},
+            want_exit_code=1,
+            want_stderr_contains="method from environment contains invalid characters",
+        ),
+
+        TestCase(
+            name="Security: CRLF injection in user-agent from environment rejected",
+            give_args=["{PROTOCOL}://127.0.0.1:{PORT}/"],
+            give_env={"CHECK_USER_AGENT": "Agent\r\nInjected: header"},
+            want_exit_code=1,
+            want_stderr_contains="user-agent from environment contains invalid characters",
+        ),
+
+        TestCase(
+            name="Security: LF-only injection in path rejected",
+            give_args=["{PROTOCOL}://127.0.0.1:{PORT}/test\nInjected: header"],
+            want_exit_code=1,
+            want_stderr_contains="path contains invalid characters",
+        ),
+
+        TestCase(
+            name="Security: CR-only injection in hostname rejected",
+            give_args=["{PROTOCOL}://test\rhost.com:{PORT}/"],
+            want_exit_code=1,
+            want_stderr_contains="hostname contains invalid characters",
+        ),
+
+        TestCase(
+            name="Security: Very long hostname (valid size)",
+            give_args=["{PROTOCOL}://" + "a" * (255 - 4) + ".com:{PORT}/"],
+            want_exit_code=1,
+        ),
+
+        TestCase(
+            name="Security: Very long path (valid size)",
+            give_args=["{PROTOCOL}://127.0.0.1:{PORT}/" + "a" * 500],
+            want_exit_code=0,
+            want_url_path="/" + "a" * 500,
+        ),
+
+        TestCase(
+            name="Security: Maximum valid port 65535",
+            give_args=["{PROTOCOL}://127.0.0.1:65535/"],
+            want_exit_code=1,
+        ),
+
+        TestCase(
+            name="Security: Port overflow rejected (port > 65535)",
+            give_args=["{PROTOCOL}://127.0.0.1:70000/"],
+            want_exit_code=1,
+            want_stderr_contains="port must be between",
+        ),
+
+        TestCase(
+            name="Security: Port with non-numeric characters rejected",
+            give_args=["{PROTOCOL}://127.0.0.1:80abc/"],
+            want_exit_code=1,
+            want_stderr_contains="invalid characters after port",
+        ),
+
+        TestCase(
+            name="Security: Negative port rejected via flag",
+            give_args=["-p", "-1", "{PROTOCOL}://127.0.0.1/"],
+            want_exit_code=1,
+            want_stderr_contains="port must be between",
+        ),
+
+        TestCase(
+            name="Security: Timeout overflow rejected (timeout > 3600)",
+            give_args=["-t", "10000", "{PROTOCOL}://127.0.0.1:{PORT}/"],
+            want_exit_code=1,
+            want_stderr_contains="timeout must be between",
+        ),
+
+        TestCase(
+            name="Security: Timeout underflow rejected (timeout < 1)",
+            give_args=["-t", "0", "{PROTOCOL}://127.0.0.1:{PORT}/"],
+            want_exit_code=1,
+            want_stderr_contains="timeout must be between",
+        ),
+
+        TestCase(
+            name="Security: Non-numeric timeout rejected",
+            give_args=["-t", "abc", "{PROTOCOL}://127.0.0.1:{PORT}/"],
+            want_exit_code=1,
+            want_stderr_contains="timeout must be between",
+        ),
+
+        TestCase(
+            name="Security: Multiple custom headers no buffer overflow",
+            give_args=[
+                "-H", "X-Header-1: " + "a" * 100,
+                "-H", "X-Header-2: " + "b" * 100,
+                "-H", "X-Header-3: " + "c" * 100,
+                "-H", "X-Header-4: " + "d" * 100,
+                "-H", "X-Header-5: " + "e" * 100,
+                "{PROTOCOL}://127.0.0.1:{PORT}/"
+            ],
+            want_exit_code=0,
+            want_headers={
+                "X-Header-1": "a" * 100,
+                "X-Header-2": "b" * 100,
+                "X-Header-3": "c" * 100,
+                "X-Header-4": "d" * 100,
+                "X-Header-5": "e" * 100,
+            },
+        ),
+
+        TestCase(
+            name="Security: Custom header at max length",
+            give_args=[
+                "-H", "X-Long-Header: " + "x" * 450,
+                "{PROTOCOL}://127.0.0.1:{PORT}/"
+            ],
+            want_exit_code=0,
+            want_headers={"X-Long-Header": "x" * 450},
+        ),
+
+        TestCase(
+            name="Security: Custom header exceeds max length rejected",
+            give_args=[
+                "-H", "X-Long-Header: " + "x" * 600,
+                "{PROTOCOL}://127.0.0.1:{PORT}/"
+            ],
+            want_exit_code=1,
+            want_stderr_contains="header too long",
+        ),
+
+        TestCase(
+            name="Security: Maximum number of custom headers",
+            give_args=["-H", "X-Header-0: value0"] +
+                      [item for i in range(1, 32) for item in ["-H", f"X-Header-{i}: value{i}"]] +
+                      ["{PROTOCOL}://127.0.0.1:{PORT}/"],
+            want_exit_code=0,
+        ),
+
+        TestCase(
+            name="Security: Too many custom headers rejected",
+            give_args=["-H", "X-Header-0: value0"] +
+                      [item for i in range(1, 33) for item in ["-H", f"X-Header-{i}: value{i}"]] +
+                      ["{PROTOCOL}://127.0.0.1:{PORT}/"],
+            want_exit_code=1,
+            want_stderr_contains="too many headers",
+        ),
+
+        TestCase(
+            name="Security: Basic auth credentials at max length",
+            give_args=[
+                "--basic-auth", "user" * 50 + ":" + "pass" * 50,
+                "{PROTOCOL}://127.0.0.1:{PORT}/"
+            ],
+            want_stderr_contains="basic auth credentials too long",
+            want_exit_code=1,
+        ),
+
+        TestCase(
+            name="Security: Empty hostname rejected",
+            give_args=["{PROTOCOL}://:{PORT}/"],
+            want_exit_code=1,
+            want_stderr_contains="empty hostname",
+        ),
+
+        TestCase(
+            name="Security: Whitespace in header name rejected",
+            give_args=["-H", "Bad Header: value", "{PROTOCOL}://127.0.0.1:{PORT}/"],
+            want_exit_code=1,
+            want_stderr_contains="invalid header format",
+        ),
+
+        TestCase(
+            name="Security: Header without colon rejected",
+            give_args=["-H", "BadHeader", "{PROTOCOL}://127.0.0.1:{PORT}/"],
+            want_exit_code=1,
+            want_stderr_contains="invalid header format",
+        ),
+
+        TestCase(
+            name="Security: Empty header rejected",
+            give_args=["-H", "", "{PROTOCOL}://127.0.0.1:{PORT}/"],
+            want_exit_code=1,
+            want_stderr_contains="invalid header format",
+        ),
+
+        TestCase(
+            name="Security: Basic auth without colon rejected",
+            give_args=["--basic-auth", "userpass", "{PROTOCOL}://127.0.0.1:{PORT}/"],
+            want_exit_code=1,
+            want_stderr_contains="must be in format 'username:password'",
+        ),
     ]
 
 

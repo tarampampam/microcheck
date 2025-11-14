@@ -335,6 +335,13 @@ static bool resolve_host(const char *host, struct in_addr *addr) {
   }
 
   // extract IPv4 address from result
+  // Validate address family before casting
+  if (result_addr->ai_family != AF_INET) {
+    fprintf(stderr, "Error: unexpected address family (expected AF_INET)\n");
+    freeaddrinfo(result_addr);
+    return false;
+  }
+
   struct sockaddr_in *ipv4 = (struct sockaddr_in *)result_addr->ai_addr;
   memcpy(addr, &ipv4->sin_addr, sizeof(*addr));
 

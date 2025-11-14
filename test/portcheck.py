@@ -810,6 +810,99 @@ def get_test_cases() -> List[TestCase]:
             use_udp=True,
             no_server=True,
         ),
+
+        TestCase(
+            name="Security: Very long hostname rejected",
+            give_args=["--host", "a" * 500, "--port", "80"],
+            want_exit_code=1,
+            want_stderr_contains="failed to resolve host",
+            no_server=True,
+        ),
+
+        TestCase(
+            name="Security: Port overflow rejected (port > 65535)",
+            give_args=["--port", "70000"],
+            want_exit_code=1,
+            want_stderr_contains="port must be between",
+            no_server=True,
+        ),
+
+        TestCase(
+            name="Security: Port underflow rejected (port < 1)",
+            give_args=["--port", "0"],
+            want_exit_code=1,
+            want_stderr_contains="port must be between",
+            no_server=True,
+        ),
+
+        TestCase(
+            name="Security: Negative port rejected",
+            give_args=["--port", "-1"],
+            want_exit_code=1,
+            want_stderr_contains="port must be between",
+            no_server=True,
+        ),
+
+        TestCase(
+            name="Security: Timeout overflow rejected (timeout > 3600)",
+            give_args=["--port", "8080", "--timeout", "10000"],
+            want_exit_code=1,
+            want_stderr_contains="timeout must be between",
+            no_server=True,
+        ),
+
+        TestCase(
+            name="Security: Timeout underflow rejected (timeout < 1)",
+            give_args=["--port", "8080", "--timeout", "0"],
+            want_exit_code=1,
+            want_stderr_contains="timeout must be between",
+            no_server=True,
+        ),
+
+        TestCase(
+            name="Security: Non-numeric port rejected",
+            give_args=["--port", "abc"],
+            want_exit_code=1,
+            want_stderr_contains="port must be between",
+            no_server=True,
+        ),
+
+        TestCase(
+            name="Security: Non-numeric timeout rejected",
+            give_args=["--port", "8080", "--timeout", "abc"],
+            want_exit_code=1,
+            want_stderr_contains="timeout must be between",
+            no_server=True,
+        ),
+
+        TestCase(
+            name="Security: Port with extra characters rejected",
+            give_args=["--port", "8080abc"],
+            want_exit_code=1,
+            want_stderr_contains="port must be between",
+            no_server=True,
+        ),
+
+        TestCase(
+            name="Security: Timeout with extra characters rejected",
+            give_args=["--port", "8080", "--timeout", "5abc"],
+            want_exit_code=1,
+            want_stderr_contains="timeout must be between",
+            no_server=True,
+        ),
+
+        TestCase(
+            name="Security: Multiple arguments check - no buffer overflow",
+            give_args=[
+                "--host", "127.0.0.1",
+                "--port", "{PORT}",
+                "--timeout", "5",
+                "--host-env", "CUSTOM_HOST",
+                "--port-env", "CUSTOM_PORT",
+                "--timeout-env", "CUSTOM_TIMEOUT",
+            ],
+            want_exit_code=0,
+        ),
     ]
 
 

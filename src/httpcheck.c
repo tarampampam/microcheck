@@ -11,6 +11,7 @@
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <signal.h>
@@ -423,6 +424,43 @@ static bool base64_encode(const char *input, char *output, size_t out_size) {
 }
 
 /**
+ * Validate string for CRLF injection attempts.
+ * Returns false if string contains CR or LF characters.
+ */
+static bool validate_no_crlf(const char *str) {
+  if (str == NULL) {
+    return false;
+  }
+
+  for (const char *p = str; *p != '\0'; p++) {
+    if (*p == '\r' || *p == '\n') {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Validate string for CRLF injection attempts with explicit length.
+ * Returns false if string contains CR or LF characters within the specified
+ * length.
+ */
+static bool validate_no_crlf_len(const char *str, size_t len) {
+  if (str == NULL) {
+    return false;
+  }
+
+  for (size_t i = 0; i < len; i++) {
+    if (str[i] == '\r' || str[i] == '\n') {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
  * Validate custom HTTP header format.
  * Headers must be in format "Name: Value" with no leading/trailing whitespace
  * in name.
@@ -443,6 +481,11 @@ static bool validate_header(const char *header) {
     if (isspace((unsigned char)*p)) {
       return false;
     }
+  }
+
+  // Check for CRLF injection attempts in entire header
+  if (!validate_no_crlf(header)) {
+    return false;
   }
 
   return true;
@@ -518,6 +561,12 @@ static bool parse_url(const char *url, char *host, size_t host_size, int *port,
       return false;
     }
 
+    // Check for CRLF injection attempts in hostname
+    if (!validate_no_crlf_len(start, host_len)) {
+      fprintf(stderr, "Error: hostname contains invalid characters (CR/LF)\n");
+      return false;
+    }
+
     memcpy(host, start, host_len);
     host[host_len] = '\0';
 
@@ -559,6 +608,12 @@ static bool parse_url(const char *url, char *host, size_t host_size, int *port,
       return false;
     }
 
+    // Check for CRLF injection attempts in hostname
+    if (!validate_no_crlf_len(start, host_len)) {
+      fprintf(stderr, "Error: hostname contains invalid characters (CR/LF)\n");
+      return false;
+    }
+
     memcpy(host, start, host_len);
     host[host_len] = '\0';
     *port = default_port;
@@ -570,6 +625,12 @@ static bool parse_url(const char *url, char *host, size_t host_size, int *port,
 
     if (path_len >= path_size) {
       fprintf(stderr, "Error: path too long (max %zu chars)\n", path_size - 1);
+      return false;
+    }
+
+    // Check for CRLF injection attempts in path
+    if (!validate_no_crlf_len(slash, path_len)) {
+      fprintf(stderr, "Error: path contains invalid characters (CR/LF)\n");
       return false;
     }
 
@@ -633,11 +694,19 @@ static int build_http_request(char *request, size_t request_size,
                               const char **headers, int header_count) {
   // prepare host with port if non-standard
   char host_with_port[MAX_HOSTNAME_LEN + 10]; // +10 for ":65535\0"
+  int snprintf_ret;
 
   if (port == default_port) {
-    snprintf(host_with_port, sizeof(host_with_port), "%s", host);
+    snprintf_ret = snprintf(host_with_port, sizeof(host_with_port), "%s", host);
   } else {
-    snprintf(host_with_port, sizeof(host_with_port), "%s:%d", host, port);
+    snprintf_ret =
+        snprintf(host_with_port, sizeof(host_with_port), "%s:%d", host, port);
+  }
+
+  // Check if snprintf truncated the output
+  if (snprintf_ret < 0 || (size_t)snprintf_ret >= sizeof(host_with_port)) {
+    fprintf(stderr, "Error: hostname too long for Host header\n");
+    return -1;
   }
 
   // build request line and mandatory headers
@@ -661,11 +730,21 @@ static int build_http_request(char *request, size_t request_size,
       return -1;
     }
 
-    int auth_len =
-        snprintf(request + req_len, request_size - (size_t)req_len,
-                 "Authorization: Basic %s\r\n", auth_encoded);
+    int auth_len = snprintf(request + req_len, request_size - (size_t)req_len,
+                            "Authorization: Basic %s\r\n", auth_encoded);
 
-    if (auth_len < 0 || (size_t)req_len + (size_t)auth_len >= request_size) {
+    if (auth_len < 0) {
+      fprintf(stderr, "Error: failed to format auth header\n");
+      return -1;
+    }
+
+    // Check for integer overflow before adding
+    if (req_len > INT_MAX - auth_len) {
+      fprintf(stderr, "Error: HTTP request length overflow\n");
+      return -1;
+    }
+
+    if ((size_t)req_len + (size_t)auth_len >= request_size) {
       fprintf(stderr, "Error: HTTP request too long (with auth header)\n");
       return -1;
     }
@@ -678,7 +757,18 @@ static int build_http_request(char *request, size_t request_size,
     int hdr_len = snprintf(request + req_len, request_size - (size_t)req_len,
                            "%s\r\n", headers[i]);
 
-    if (hdr_len < 0 || (size_t)req_len + (size_t)hdr_len >= request_size) {
+    if (hdr_len < 0) {
+      fprintf(stderr, "Error: failed to format custom header\n");
+      return -1;
+    }
+
+    // Check for integer overflow before adding
+    if (req_len > INT_MAX - hdr_len) {
+      fprintf(stderr, "Error: HTTP request length overflow\n");
+      return -1;
+    }
+
+    if ((size_t)req_len + (size_t)hdr_len >= request_size) {
       fprintf(stderr, "Error: HTTP request too long (with custom headers)\n");
       return -1;
     }
@@ -690,7 +780,18 @@ static int build_http_request(char *request, size_t request_size,
   int final_len = snprintf(request + req_len, request_size - (size_t)req_len,
                            "Connection: close\r\n\r\n");
 
-  if (final_len < 0 || (size_t)req_len + (size_t)final_len >= request_size) {
+  if (final_len < 0) {
+    fprintf(stderr, "Error: failed to format final headers\n");
+    return -1;
+  }
+
+  // Check for integer overflow before adding
+  if (req_len > INT_MAX - final_len) {
+    fprintf(stderr, "Error: HTTP request length overflow\n");
+    return -1;
+  }
+
+  if ((size_t)req_len + (size_t)final_len >= request_size) {
     fprintf(stderr, "Error: HTTP request too long\n");
     return -1;
   }
@@ -813,8 +914,8 @@ static request_result_t https_request(const char *host, int port,
   // Build HTTP request
   char request[BUFFER_SIZE];
   int req_len = build_http_request(request, sizeof(request), method, path, host,
-                                    port, HTTPS_DEFAULT_PORT, user_agent,
-                                    basic_auth, headers, header_count);
+                                   port, HTTPS_DEFAULT_PORT, user_agent,
+                                   basic_auth, headers, header_count);
 
   if (req_len < 0) {
     goto cleanup;
@@ -1042,7 +1143,22 @@ static request_result_t http_request(const char *host, int port,
 
   // prepare server address structure from getaddrinfo result
   struct sockaddr_in serv_addr;
-  memcpy(&serv_addr, result_addr->ai_addr, sizeof(serv_addr));
+  memset(&serv_addr, 0, sizeof(serv_addr));
+
+  // Validate address family and size before copying
+  if (result_addr->ai_family != AF_INET) {
+    fprintf(stderr, "Error: unexpected address family (expected AF_INET)\n");
+    freeaddrinfo(result_addr);
+    goto cleanup;
+  }
+
+  if (result_addr->ai_addrlen != sizeof(struct sockaddr_in)) {
+    fprintf(stderr, "Error: address size mismatch\n");
+    freeaddrinfo(result_addr);
+    goto cleanup;
+  }
+
+  memcpy(&serv_addr, result_addr->ai_addr, result_addr->ai_addrlen);
 
   // free getaddrinfo result
   freeaddrinfo(result_addr);
@@ -1071,8 +1187,8 @@ static request_result_t http_request(const char *host, int port,
   // build HTTP request - using HTTP/1.1 with Connection: close for simplicity
   char request[BUFFER_SIZE];
   int req_len = build_http_request(request, sizeof(request), method, path, host,
-                                    port, HTTP_DEFAULT_PORT, user_agent,
-                                    basic_auth, headers, header_count);
+                                   port, HTTP_DEFAULT_PORT, user_agent,
+                                   basic_auth, headers, header_count);
 
   if (req_len < 0) {
     goto cleanup;
@@ -1315,7 +1431,12 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Error: %s requires an argument\n", arg);
         return EXIT_FAILURE_CODE;
       }
-      config.method = argv[++i];
+      const char *method_arg = argv[++i];
+      if (!validate_no_crlf(method_arg)) {
+        fprintf(stderr, "Error: method contains invalid characters (CR/LF)\n");
+        return EXIT_FAILURE_CODE;
+      }
+      config.method = method_arg;
     } else if (extract_equals_value(arg, "--method-env=", &value)) {
       config.method_env = value;
     } else if (matches_env_option(arg, &OPT_METHOD_ENV)) {
@@ -1329,7 +1450,13 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Error: %s requires an argument\n", arg);
         return EXIT_FAILURE_CODE;
       }
-      config.user_agent = argv[++i];
+      const char *ua_arg = argv[++i];
+      if (!validate_no_crlf(ua_arg)) {
+        fprintf(stderr,
+                "Error: user-agent contains invalid characters (CR/LF)\n");
+        return EXIT_FAILURE_CODE;
+      }
+      config.user_agent = ua_arg;
     } else if (extract_equals_value(arg, "--user-agent-env=", &value)) {
       config.user_agent_env = value;
     } else if (matches_env_option(arg, &OPT_USER_AGENT_ENV)) {
@@ -1453,13 +1580,31 @@ int main(int argc, char *argv[]) {
   // resolve method from environment if not explicitly set
   if (config.method == NULL) {
     const char *env_method = getenv(config.method_env);
-    config.method = (env_method != NULL) ? env_method : DEFAULT_METHOD;
+    if (env_method != NULL) {
+      if (!validate_no_crlf(env_method)) {
+        fprintf(stderr, "Error: method from environment contains invalid "
+                        "characters (CR/LF)\n");
+        return EXIT_FAILURE_CODE;
+      }
+      config.method = env_method;
+    } else {
+      config.method = DEFAULT_METHOD;
+    }
   }
 
   // resolve user-agent from environment if not explicitly set
   if (config.user_agent == NULL) {
     const char *env_ua = getenv(config.user_agent_env);
-    config.user_agent = (env_ua != NULL) ? env_ua : DEFAULT_USER_AGENT;
+    if (env_ua != NULL) {
+      if (!validate_no_crlf(env_ua)) {
+        fprintf(stderr, "Error: user-agent from environment contains invalid "
+                        "characters (CR/LF)\n");
+        return EXIT_FAILURE_CODE;
+      }
+      config.user_agent = env_ua;
+    } else {
+      config.user_agent = DEFAULT_USER_AGENT;
+    }
   }
 
   // resolve timeout from environment if not explicitly set via flag
