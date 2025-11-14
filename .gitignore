@@ -6,6 +6,7 @@
 /httpcheck
 /httpscheck
 /portcheck
+/parallel
 
 ## Temp dirs & trash
 /libs

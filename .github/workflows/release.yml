@@ -68,6 +68,7 @@ jobs:
           docker cp app:/bin/httpcheck ./dist/httpcheck
           docker cp app:/bin/httpscheck ./dist/httpscheck
           docker cp app:/bin/portcheck ./dist/portcheck
+          docker cp app:/bin/parallel ./dist/parallel
           cd ./dist
           tar -czf ../release.tar.gz *
           zip -r ../release.zip .

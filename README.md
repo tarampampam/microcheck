@@ -44,7 +44,7 @@ So, think of this as an alternative to:
 -
 -HEALTHCHECK --interval=5m --timeout=3s CMD curl -f http://localhost:8080/ || exit 1
 +# add httpcheck binary (+~75KB)
-+COPY --from=ghcr.io/tarampampam/microcheck /bin/httpcheck /bin/httpcheck
++COPY --from=ghcr.io/tarampampam/microcheck:1 /bin/httpcheck /bin/httpcheck
 +
 +HEALTHCHECK --interval=5m --timeout=3s CMD ["httpcheck", "http://localhost:8080/"]
 ```
@@ -70,11 +70,12 @@ So, think of this as an alternative to:
 
 ## 🧩 Tools
 
-| Tool         |  Size  | Use case                       |
-|--------------|:------:|--------------------------------|
-| `httpcheck`  | ~75KB  | Check HTTP (only) endpoints    |
-| `httpscheck` | ~500KB | Check HTTP and HTTPS endpoints |
-| `portcheck`  | ~70KB  | Check TCP/UDP ports            |
+| Tool         |  Size  | Use case                          |
+|--------------|:------:|-----------------------------------|
+| `httpcheck`  | ~75KB  | Check HTTP (only) endpoints       |
+| `httpscheck` | ~500KB | Check HTTP and HTTPS endpoints    |
+| `portcheck`  | ~70KB  | Check TCP/UDP ports               |
+| `parallel`   | ~50KB  | Run multiple commands in parallel |
 
 ### `httpcheck` & `httpscheck`
 
@@ -155,6 +156,37 @@ CHECK_METHOD=HEAD httpcheck http://127.0.0.1
 APP_PORT=8080 httpcheck --port-env=APP_PORT http://127.0.0.1
 ```
 
+### `parallel`
+
+This tool executes multiple commands in parallel and is designed specifically for Docker health checks where you
+need to verify multiple conditions simultaneously. It returns exit code 0 only if all commands succeed, or the
+exit code of the first failed command otherwise.
+
+The main use case is combining multiple health checks (HTTP endpoints, TCP ports, etc.) into a single
+`HEALTHCHECK` instruction. When any command fails, `parallel` immediately terminates all other running commands
+and returns the failure code, ensuring fast failure detection.
+
+```
+Options:
+  -h, --help               Show this help message
+  -j, --jobs               Limit number of parallel jobs (default: unlimited)
+```
+
+#### Argument Parsing
+
+Commands can be specified as:
+
+- Unquoted words for simple commands: `parallel whoami id`
+- Quoted strings for commands with arguments: `parallel "echo hello" "echo world"`
+- Mixed quoted/unquoted parts that concatenate: `parallel cmd'arg1 arg2'"arg3"`
+
+Inside quoted strings:
+
+- Single quotes preserve everything literally (no escaping)
+- Double quotes allow backslash escaping
+- Spaces and tabs separate arguments
+- Adjacent quoted/unquoted parts concatenate into single argument
+
 ## 🐋 Docker image
 
 | Registry                           | Image                            |
@@ -174,8 +206,8 @@ APP_PORT=8080 httpcheck --port-env=APP_PORT http://127.0.0.1
 The following platforms for this image are available:
 
 ```shell
-$ docker run --rm mplatform/mquery ghcr.io/tarampampam/microcheck
-Image: ghcr.io/tarampampam/microcheck:latest
+$ docker run --rm mplatform/mquery ghcr.io/tarampampam/microcheck:1
+Image: ghcr.io/tarampampam/microcheck:1
  * Manifest List: Yes (Image type: application/vnd.oci.image.index.v1+json)
  * Supported platforms:
    - linux/386
@@ -208,7 +240,7 @@ COPY --from=docker.io/containous/whoami:v1.5.0 /whoami /whoami
 
 # import httpcheck from current repository image (exactly 'httpcheck' due
 # to we don't need TLS here)
-COPY --from=ghcr.io/tarampampam/microcheck /bin/httpcheck /bin/httpcheck
+COPY --from=ghcr.io/tarampampam/microcheck:1 /bin/httpcheck /bin/httpcheck
 
 # docs: <https://docs.docker.com/reference/dockerfile#healthcheck>
 HEALTHCHECK --interval=5s --retries=2 CMD ["httpcheck", "http://127.0.0.1:8080/health"]
@@ -229,6 +261,42 @@ $ docker kill http-check
 </details>
 
 <details>
+  <summary><strong>🚀 Multiple health checks with parallel</strong></summary>
+
+This example shows how to use `parallel` to check multiple conditions simultaneously. The container is
+considered healthy only if all checks pass:
+
+```Dockerfile
+FROM scratch
+
+# import some executable application
+COPY --from=docker.io/containous/whoami:v1.5.0 /whoami /whoami
+
+# import httpcheck, portcheck and parallel from microcheck image
+COPY --from=ghcr.io/tarampampam/microcheck:1 /bin/httpcheck /bin/portcheck /bin/parallel /bin/
+
+# check both HTTP endpoint AND port using parallel (the port usually will differ from the HTTP port)
+HEALTHCHECK --interval=5s --retries=2 CMD ["parallel", \
+    "httpcheck http://127.0.0.1:8080", \
+    "portcheck --port 8080" \
+]
+
+ENTRYPOINT ["/whoami", "-port", "8080"]
+```
+
+Let's build it and run:
+
+```shell
+$ docker build -t parallel:local - < ./examples/parallel.Dockerfile
+$ docker run --rm -d --name parallel parallel:local
+$ docker ps --filter 'name=parallel' --format '{{.Status}}'
+Up 6 seconds (healthy)
+$ docker kill parallel
+```
+
+</details>
+
+<details>
   <summary><strong>🚀 Healthcheck with protocol auto-detection</strong></summary>
 
 This example demonstrates the protocol auto-detection feature of `httpscheck`, which is useful when your application
@@ -242,7 +310,7 @@ FROM scratch
 COPY --from=your-app:latest /app /app
 
 # import httpscheck to enable auto-detection
-COPY --from=ghcr.io/tarampampam/microcheck /bin/httpscheck /bin/httpscheck
+COPY --from=ghcr.io/tarampampam/microcheck:1 /bin/httpscheck /bin/httpscheck
 
 # healthcheck will try HTTPS first, fall back to HTTP if TLS is not available
 # note: no http:// or https:// prefix in the URL
@@ -279,7 +347,7 @@ FROM scratch
 COPY --from=docker.io/containous/whoami:v1.5.0 /whoami /whoami
 
 # import portcheck because we need only TCP port check here
-COPY --from=ghcr.io/tarampampam/microcheck /bin/portcheck /bin/portcheck
+COPY --from=ghcr.io/tarampampam/microcheck:1 /bin/portcheck /bin/portcheck
 
 # docs: <https://docs.docker.com/reference/dockerfile#healthcheck>
 HEALTHCHECK --interval=5s --retries=2 CMD ["portcheck", "--port", "8080"]
