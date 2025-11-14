@@ -20,7 +20,7 @@ The test suite includes:
 - Security tests (safe_kill validation)
 
 Usage:
-    python3 parallel_test.py [--bin PATH]
+    python3 parallel.py [--bin PATH]
 """
 
 import subprocess
@@ -157,13 +157,11 @@ def run_test(binary: str, test: TestCase) -> TestResult:
         return TestResult(True, duration=duration)
 
     except subprocess.TimeoutExpired:
-        duration = time.time() - start_time
         return TestResult(
             False,
             f"Test timed out after {duration:.2f}s"
         )
     except Exception as e:
-        duration = time.time() - start_time
         return TestResult(
             False,
             f"Test failed with exception: {type(e).__name__}: {str(e)}"
@@ -668,7 +666,7 @@ def get_test_cases() -> List[TestCase]:
             want_exit_code=0,
         ),
 
-        # Stdout/STDERR HANDLING
+        # stdout/stderr handling
 
         TestCase(
             name="Output: Multiple commands stdout preserved",

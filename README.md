@@ -178,7 +178,8 @@ Commands can be specified as:
 
 - Unquoted words for simple commands: `parallel whoami id`
 - Quoted strings for commands with arguments: `parallel "echo hello" "echo world"`
-- Mixed quoted/unquoted parts that concatenate: `parallel cmd'arg1 arg2'"arg3"`
+- Mixed quoted/unquoted parts that concatenate: `parallel cmd'arg1 arg2'"arg3"` (produces
+  a single argument: `cmdarg1 arg2arg3`)
 
 Inside quoted strings:
 

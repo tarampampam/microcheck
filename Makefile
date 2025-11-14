@@ -92,7 +92,7 @@ src/version.h:
 fmt: $(wildcard src/*.c src/*.h)
 	clang-format -i $^
 
-test: httpcheck httpscheck
+test: httpcheck httpscheck parallel
 	python3 ./test/httpcheck.py --bin ./httpcheck
 	python3 ./test/httpcheck.py --bin ./httpscheck --https
 	python3 ./test/httpcheck.py --bin ./httpscheck

@@ -222,6 +222,14 @@ static void print_help(void) {
                   "if all succeed,\n");
   fprintf(stderr, "or the exit code of the first failed command.\n\n");
 
+  fprintf(stderr, "Behavior:\n");
+  fprintf(stderr, "  - All commands run in parallel (or limited by %s)\n",
+          OPT_JOBS.short_flag);
+  fprintf(stderr, "  - If any command fails, all others are terminated\n");
+  fprintf(stderr, "  - Returns exit code of first failed command\n");
+  fprintf(stderr, "  - On SIGINT/SIGTERM, all commands are terminated and "
+                  "returns exit code 1\n\n");
+
   fprintf(stderr, "Usage:\n");
   fprintf(stderr, "  %s [OPTIONS] COMMAND [COMMAND...]\n\n", APP_NAME);
 
@@ -262,16 +270,8 @@ static void print_help(void) {
           APP_NAME);
 
   fprintf(stderr, "  # Limit parallel execution to 2 jobs\n");
-  fprintf(stderr, "  %s %s 2 cmd1 cmd2 cmd3 cmd4\n\n", APP_NAME,
+  fprintf(stderr, "  %s %s 2 cmd1 cmd2 cmd3 cmd4\n", APP_NAME,
           OPT_JOBS.short_flag);
-
-  fprintf(stderr, "Behavior:\n");
-  fprintf(stderr, "  - All commands run in parallel (or limited by %s)\n",
-          OPT_JOBS.short_flag);
-  fprintf(stderr, "  - If any command fails, all others are terminated\n");
-  fprintf(stderr, "  - Returns exit code of first failed command\n");
-  fprintf(stderr, "  - On SIGINT/SIGTERM, all commands are terminated and "
-                  "returns exit code 1\n");
 }
 
 /**
@@ -478,6 +478,10 @@ static bool add_running_job(pid_t pid, pid_t pgid, int cmd_index) {
 
     /* Check for size_t overflow in allocation */
     size_t new_size;
+
+    /* NOTE: __builtin_mul_overflow is a GCC/Clang built-in.
+     * This code requires compilation with GCC or Clang (or compatible compilers).
+     */
     if (__builtin_mul_overflow(sizeof(job_t), (size_t)new_capacity,
                                &new_size)) {
       fprintf(stderr, "Error: job tracking size overflow\n");
