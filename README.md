@@ -157,17 +157,19 @@ APP_PORT=8080 httpcheck --port-env=APP_PORT http://127.0.0.1
 
 ## 🐋 Docker image
 
-| Registry                          | Image                            |
-|-----------------------------------|----------------------------------|
-| [GitHub Container Registry][ghcr] | `ghcr.io/tarampampam/microcheck` |
-| [Docker Hub][docker-hub]          | `tarampampam/microcheck`         |
+| Registry                           | Image                            |
+|------------------------------------|----------------------------------|
+| [GitHub Container Registry][ghcr]  | `ghcr.io/tarampampam/microcheck` |
+| [Red Hat Container Registry][quay] | `quay.io/tarampampam/microcheck` |
+| [Docker Hub][docker-hub]           | `tarampampam/microcheck`         |
 
 [docker-hub]:https://hub.docker.com/r/tarampampam/microcheck
 [ghcr]:https://github.com/users/tarampampam/packages/container/package/microcheck
+[quay]:https://quay.io/repository/tarampampam/microcheck
 
 > [!IMPORTANT]
 > Using the `latest` tag for the Docker image is highly discouraged due to potential backward-incompatible changes
-> during **major** upgrades. Please use tags in the `X.Y.Z` format.
+> during **major** upgrades. Please use tags in the `X.Y.Z`, `X.Y`, or at least `X` format.
 
 The following platforms for this image are available:
 
