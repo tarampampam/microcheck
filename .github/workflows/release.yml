@@ -86,7 +86,7 @@ jobs:
       matrix:
         include:
           - {registry: docker, image: index.docker.io/tarampampam/microcheck}
-          - {registry: ghcro, image: 'ghcr.io/${{ github.repository }}'}
+          - {registry: ghcr, image: 'ghcr.io/${{ github.repository }}'}
           - {registry: quay, image: quay.io/tarampampam/microcheck}
     steps:
       - if: matrix.registry == 'docker'
@@ -154,7 +154,7 @@ jobs:
     needs: [binary-files]
     permissions:
       id-token: write
-      contents: read
+      contents: write
       attestations: write
     steps:
       - uses: robinraju/release-downloader@v1
