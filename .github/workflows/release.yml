@@ -89,13 +89,13 @@ jobs:
           - {registry: ghcro, image: 'ghcr.io/${{ github.repository }}'}
           - {registry: quay, image: quay.io/tarampampam/microcheck}
     steps:
-      - if: matrix.registry == docker
+      - if: matrix.registry == 'docker'
         uses: docker/login-action@v3
         with: {username: '${{ secrets.DOCKER_LOGIN }}', password: '${{ secrets.DOCKER_PASSWORD }}'}
-      - if: matrix.registry == quay
+      - if: matrix.registry == 'quay'
         uses: docker/login-action@v3
         with: {registry: quay.io, username: '${{ secrets.QUAY_LOGIN }}', password: '${{ secrets.QUAY_PASSWORD }}'}
-      - if: matrix.registry == ghcr
+      - if: matrix.registry == 'ghcr'
         uses: docker/login-action@v3
         with: {registry: ghcr.io, username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}'}
       - uses: actions/attest-build-provenance@v3
