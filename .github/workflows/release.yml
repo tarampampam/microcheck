@@ -11,6 +11,9 @@ jobs:
   docker-image:
     name: Build the docker image
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+      tags: ${{ steps.tags.outputs.list }}
     steps:
       - uses: actions/checkout@v5
       - {uses: gacts/github-slug@v1, id: slug}
@@ -22,26 +25,85 @@ jobs:
         with: {registry: quay.io, username: '${{ secrets.QUAY_LOGIN }}', password: '${{ secrets.QUAY_PASSWORD }}'}
       - uses: docker/login-action@v3
         with: {registry: ghcr.io, username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}'}
+      - id: tags
+        env:
+          HUB_IMAGE: tarampampam/microcheck
+          GHCR_IMAGE: ghcr.io/${{ github.repository }}
+          QUAY_IMAGE: quay.io/tarampampam/microcheck
+          EXACT: ${{ steps.slug.outputs.version-semantic }}
+          MINOR: ${{ steps.slug.outputs.version-major }}.${{ steps.slug.outputs.version-minor }}
+          MAJOR: ${{ steps.slug.outputs.version-major }}
+        run: |
+          echo 'list<<EOF' >> $GITHUB_OUTPUT
+          echo "$HUB_IMAGE:$EXACT" >> "$GITHUB_OUTPUT"
+          echo "$HUB_IMAGE:$MINOR" >> "$GITHUB_OUTPUT"
+          echo "$HUB_IMAGE:$MAJOR" >> "$GITHUB_OUTPUT"
+          echo "$HUB_IMAGE:latest" >> "$GITHUB_OUTPUT"
+          echo "$GHCR_IMAGE:$EXACT" >> "$GITHUB_OUTPUT"
+          echo "$GHCR_IMAGE:$MINOR" >> "$GITHUB_OUTPUT"
+          echo "$GHCR_IMAGE:$MAJOR" >> "$GITHUB_OUTPUT"
+          echo "$GHCR_IMAGE:latest" >> "$GITHUB_OUTPUT"
+          echo "$QUAY_IMAGE:$EXACT" >> "$GITHUB_OUTPUT"
+          echo "$QUAY_IMAGE:$MINOR" >> "$GITHUB_OUTPUT"
+          echo "$QUAY_IMAGE:$MAJOR" >> "$GITHUB_OUTPUT"
+          echo "$QUAY_IMAGE:latest" >> "$GITHUB_OUTPUT"
+          echo 'EOF' >> $GITHUB_OUTPUT
       - uses: docker/build-push-action@v6
+        id: push
         with:
           context: .
           file: Dockerfile
           push: true
           platforms: linux/386,linux/amd64,linux/arm/v6,linux/arm/v7,linux/arm64/v8,linux/ppc64le,linux/s390x # <-- important
           build-args: APP_VERSION=${{ steps.slug.outputs.version-semantic }}
-          tags: |
-            tarampampam/microcheck:latest
-            tarampampam/microcheck:${{ steps.slug.outputs.version-semantic }}
-            tarampampam/microcheck:${{ steps.slug.outputs.version-major }}
-            tarampampam/microcheck:${{ steps.slug.outputs.version-major }}.${{ steps.slug.outputs.version-minor }}
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ steps.slug.outputs.version-semantic }}
-            ghcr.io/${{ github.repository }}:${{ steps.slug.outputs.version-major }}
-            ghcr.io/${{ github.repository }}:${{ steps.slug.outputs.version-major }}.${{ steps.slug.outputs.version-minor }}
-            quay.io/tarampampam/microcheck:latest
-            quay.io/tarampampam/microcheck:${{ steps.slug.outputs.version-semantic }}
-            quay.io/tarampampam/microcheck:${{ steps.slug.outputs.version-major }}
-            quay.io/tarampampam/microcheck:${{ steps.slug.outputs.version-major }}.${{ steps.slug.outputs.version-minor }}
+          tags: ${{ steps.tags.outputs.list }}
+
+  update-release-notes:
+    name: Update the release notes
+    runs-on: ubuntu-latest
+    needs: [docker-image]
+    permissions:
+      contents: write
+    steps:
+      - run: printf "\n## 🐋 Docker images\n\n%s\n" "${{ needs.docker-image.outputs.tags }}" > docker-images.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ github.ref }}
+          body_path: docker-images.md
+          append_body: true
+
+  attest-docker-image:
+    name: Attest the docker image
+    runs-on: ubuntu-latest
+    needs: [docker-image]
+    permissions:
+      id-token: write
+      packages: write
+      contents: read
+      attestations: write
+    strategy:
+      matrix:
+        include:
+          - {registry: docker, image: index.docker.io/tarampampam/microcheck}
+          - {registry: ghcro, image: 'ghcr.io/${{ github.repository }}'}
+          - {registry: quay, image: quay.io/tarampampam/microcheck}
+    steps:
+      - if: matrix.registry == docker
+        uses: docker/login-action@v3
+        with: {username: '${{ secrets.DOCKER_LOGIN }}', password: '${{ secrets.DOCKER_PASSWORD }}'}
+      - if: matrix.registry == quay
+        uses: docker/login-action@v3
+        with: {registry: quay.io, username: '${{ secrets.QUAY_LOGIN }}', password: '${{ secrets.QUAY_PASSWORD }}'}
+      - if: matrix.registry == ghcr
+        uses: docker/login-action@v3
+        with: {registry: ghcr.io, username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}'}
+      - uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ matrix.image }}
+          subject-digest: ${{ needs.docker-image.outputs.digest }}
+          push-to-registry: true
+
   binary-files:
     name: Publish the binary files (${{ matrix.platform }})
     runs-on: ubuntu-latest
@@ -84,4 +146,30 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: ./release.zip
           asset_name: ${{ steps.filename.outputs.slug }}.zip
+          tag: ${{ github.ref }}
+
+  attest-artifacts:
+    name: Attest artifacts and generate checksums.txt
+    runs-on: ubuntu-latest
+    needs: [binary-files]
+    permissions:
+      id-token: write
+      contents: read
+      attestations: write
+    steps:
+      - uses: robinraju/release-downloader@v1
+        with:
+          tag: ${{ github.ref }}
+          fileName: '*'
+          token: ${{ secrets.GITHUB_TOKEN }}
+          out-file-path: 'artifacts'
+      - working-directory: ./artifacts
+        run: shasum -a 256 * > checksums.txt
+      - uses: actions/attest-build-provenance@v3
+        with: {subject-path: 'artifacts/**'}
+      - uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ./artifacts/checksums.txt
+          asset_name: checksums.txt
           tag: ${{ github.ref }}
