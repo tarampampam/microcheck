@@ -67,21 +67,17 @@ jobs:
         env: {IMAGE_TAGS: '${{ needs.docker-image.outputs.tags }}'}
         with:
           script: |
-            const releaseId = context.payload.release.id;
-            const { data: release } = await github.rest.repos.getRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: releaseId
-            });
-
-            const footer = "\n## 🐋 Docker images\n\n```cpp\n" + (process.env.IMAGE_TAGS || 'nothing') + "\n```\n";
-
             await github.rest.repos.updateRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              release_id: releaseId,
-              body: (release.body || "") + footer,
-            });
+              release_id: context.payload.release.id,
+              body: ((await github.rest.repos.getRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: context.payload.release.id
+              })).data.body || '') +
+              "\n## 🐋 Docker images\n\n```cpp\n" + (process.env.IMAGE_TAGS || '').trim() + "\n```\n"
+            })
 
   binary-files:
     name: Publish the binary files (${{ matrix.platform }})
