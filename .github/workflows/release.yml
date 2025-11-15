@@ -36,17 +36,17 @@ jobs:
         run: |
           echo 'list<<EOF' >> $GITHUB_OUTPUT
           echo "$HUB_IMAGE:$EXACT" >> "$GITHUB_OUTPUT"
-          #echo "$HUB_IMAGE:$MINOR" >> "$GITHUB_OUTPUT" # TODO: uncomment
-          #echo "$HUB_IMAGE:$MAJOR" >> "$GITHUB_OUTPUT" # TODO: uncomment
-          #echo "$HUB_IMAGE:latest" >> "$GITHUB_OUTPUT" # TODO: uncomment
+          echo "$HUB_IMAGE:$MINOR" >> "$GITHUB_OUTPUT"
+          echo "$HUB_IMAGE:$MAJOR" >> "$GITHUB_OUTPUT"
+          echo "$HUB_IMAGE:latest" >> "$GITHUB_OUTPUT"
           echo "$GHCR_IMAGE:$EXACT" >> "$GITHUB_OUTPUT"
-          #echo "$GHCR_IMAGE:$MINOR" >> "$GITHUB_OUTPUT" # TODO: uncomment
-          #echo "$GHCR_IMAGE:$MAJOR" >> "$GITHUB_OUTPUT" # TODO: uncomment
-          #echo "$GHCR_IMAGE:latest" >> "$GITHUB_OUTPUT" # TODO: uncomment
+          echo "$GHCR_IMAGE:$MINOR" >> "$GITHUB_OUTPUT"
+          echo "$GHCR_IMAGE:$MAJOR" >> "$GITHUB_OUTPUT"
+          echo "$GHCR_IMAGE:latest" >> "$GITHUB_OUTPUT"
           echo "$QUAY_IMAGE:$EXACT" >> "$GITHUB_OUTPUT"
-          #echo "$QUAY_IMAGE:$MINOR" >> "$GITHUB_OUTPUT" # TODO: uncomment
-          #echo "$QUAY_IMAGE:$MAJOR" >> "$GITHUB_OUTPUT" # TODO: uncomment
-          #echo "$QUAY_IMAGE:latest" >> "$GITHUB_OUTPUT" # TODO: uncomment
+          echo "$QUAY_IMAGE:$MINOR" >> "$GITHUB_OUTPUT"
+          echo "$QUAY_IMAGE:$MAJOR" >> "$GITHUB_OUTPUT"
+          echo "$QUAY_IMAGE:latest" >> "$GITHUB_OUTPUT"
           echo 'EOF' >> $GITHUB_OUTPUT
       - uses: docker/build-push-action@v6
         id: push
@@ -54,7 +54,7 @@ jobs:
           context: .
           file: Dockerfile
           push: true
-          platforms: linux/386,linux/amd64 # TODO: ,linux/arm/v6,linux/arm/v7,linux/arm64/v8,linux/ppc64le,linux/s390x # <-- important
+          platforms: linux/386,linux/amd64,linux/arm/v6,linux/arm/v7,linux/arm64/v8,linux/ppc64le,linux/s390x # <-- important
           build-args: APP_VERSION=${{ steps.slug.outputs.version-semantic }}
           tags: ${{ steps.tags.outputs.list }}
 
@@ -88,11 +88,11 @@ jobs:
         platform: # the list should be the same as the platforms listed above
           - linux/386
           - linux/amd64
-#          - linux/arm/v6 # TODO: uncomment
-#          - linux/arm/v7 # TODO: uncomment
-#          - linux/arm64/v8 # TODO: uncomment
-#          - linux/ppc64le # TODO: uncomment
-#          - linux/s390x # TODO: uncomment
+          - linux/arm/v6
+          - linux/arm/v7
+          - linux/arm64/v8
+          - linux/ppc64le
+          - linux/s390x
     steps:
       - uses: actions/checkout@v5
       - {uses: gacts/github-slug@v1, id: slug}
