@@ -63,21 +63,15 @@ jobs:
     runs-on: ubuntu-latest
     needs: [docker-image]
     steps:
-      - uses: actions/github-script@v6
-        env: {IMAGE_TAGS: '${{ needs.docker-image.outputs.tags }}'}
+      - uses: gacts/add-to-release-notes@v1
         with:
-          script: |
-            await github.rest.repos.updateRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: context.payload.release.id,
-              body: ((await github.rest.repos.getRelease({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                release_id: context.payload.release.id
-              })).data.body || '') +
-              "\n## 🐋 Docker images\n\n```cpp\n" + (process.env.IMAGE_TAGS || '').trim() + "\n```\n"
-            })
+          skip-if-contains: '## 🐋 Docker images'
+          append: |
+            ## 🐋 Docker images
+
+            ```cpp
+            ${{ needs.docker-image.outputs.tags }}
+            ```
 
   binary-files:
     name: Publish the binary files (${{ matrix.platform }})
