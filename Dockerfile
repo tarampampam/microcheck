@@ -17,6 +17,7 @@ RUN set -x \
     && ./httpscheck --help \
     && ./portcheck --help \
     && ./parallel --help \
+    && ./pidcheck --help \
     && ls -lh .
 
 WORKDIR /tmp/rootfs
@@ -28,6 +29,7 @@ RUN set -x \
     && mv /src/httpscheck ./bin/httpscheck \
     && mv /src/portcheck ./bin/portcheck \
     && mv /src/parallel ./bin/parallel \
+    && mv /src/pidcheck ./bin/pidcheck \
     && echo 'nobody:x:10001:10001::/nonexistent:/sbin/nologin' > ./etc/passwd \
     && echo 'nogroup:x:10001:' > ./etc/group
 
