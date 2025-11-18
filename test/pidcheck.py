@@ -217,15 +217,15 @@ def run_test(binary: str, test: TestCase, temp_dir: Path) -> TestResult:
             except subprocess.TimeoutExpired:
                 test_process.kill()
                 test_process.wait()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Warning: Failed to terminate test process: {type(e).__name__}: {e}", file=sys.stderr)
 
         # Cleanup: Remove PID file
         if pidfile_path and pidfile_path.exists():
             try:
                 pidfile_path.unlink()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Warning: Failed to remove PID file: {type(e).__name__}: {e}", file=sys.stderr)
 
 
 def get_test_cases() -> List[TestCase]:

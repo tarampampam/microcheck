@@ -33,9 +33,6 @@
 #define MIN_PID 1
 #define MAX_PID 4194304 /* typical Linux maximum PID value */
 
-/* Maximum file size to read (64KB should be more than enough for PID file) */
-#define MAX_FILE_SIZE 65536
-
 /* Maximum path length (standard POSIX PATH_MAX or reasonable default) */
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -62,10 +59,9 @@ typedef struct {
  * Used for consistent parsing and help generation.
  */
 typedef struct {
-  const char *short_flag;    /* Short option (e.g., "-f") */
-  const char *long_flag;     /* Long option (e.g., "--file") */
-  const char *description;   /* Help text description */
-  const char *default_value; /* Default value for display */
+  const char *short_flag;  /* Short option (e.g., "-f") */
+  const char *long_flag;   /* Long option (e.g., "--file") */
+  const char *description; /* Help text description */
 } option_def_t;
 
 /**
@@ -80,12 +76,11 @@ typedef struct {
 } env_option_def_t;
 
 /* Option definitions - single source of truth */
-static const option_def_t OPT_HELP = {"-h", "--help", "Show this help message",
-                                      NULL};
-static const option_def_t OPT_FILE = {
-    "-f", "--file", "Path to PID file (env: CHECK_PIDFILE)", NULL};
-static const option_def_t OPT_PID = {
-    "-p", "--pid", "Process ID to check (env: CHECK_PID)", NULL};
+static const option_def_t OPT_HELP = {"-h", "--help", "Show this help message"};
+static const option_def_t OPT_FILE = {"-f", "--file",
+                                      "Path to PID file (env: CHECK_PIDFILE)"};
+static const option_def_t OPT_PID = {"-p", "--pid",
+                                     "Process ID to check (env: CHECK_PID)"};
 
 /* Environment variable override options - reference parent options */
 static const env_option_def_t OPT_FILE_ENV = {"--file-env",
@@ -274,7 +269,7 @@ static bool validate_and_convert_pid(const char *str, pid_t *pid) {
   long val = strtol(str, &endptr, 10);
 
   // check for conversion errors
-  if (errno == ERANGE || errno == EINVAL || endptr == str) {
+  if (errno == ERANGE || endptr == str) {
     return false;
   }
 
