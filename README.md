@@ -70,12 +70,13 @@ So, think of this as an alternative to:
 
 ## 🧩 Tools
 
-| Tool         |  Size  | Use case                          |
-|--------------|:------:|-----------------------------------|
-| `httpcheck`  | ~75KB  | Check HTTP (only) endpoints       |
-| `httpscheck` | ~500KB | Check HTTP and HTTPS endpoints    |
-| `portcheck`  | ~70KB  | Check TCP/UDP ports               |
-| `parallel`   | ~50KB  | Run multiple commands in parallel |
+| Tool         |  Size  | Use case                                  |
+|--------------|:------:|-------------------------------------------|
+| `httpcheck`  | ~75KB  | Check HTTP (only) endpoints               |
+| `httpscheck` | ~500KB | Check HTTP and HTTPS endpoints            |
+| `portcheck`  | ~70KB  | Check TCP/UDP ports                       |
+| `parallel`   | ~50KB  | Run multiple commands in parallel         |
+| `pidcheck`   | ~40KB  | Check if process from PID file is running |
 
 ### `httpcheck` & `httpscheck`
 
@@ -187,6 +188,66 @@ Inside quoted strings:
 - Double quotes allow backslash escaping
 - Spaces and tabs separate arguments
 - Adjacent quoted/unquoted parts concatenate into single argument
+
+### `pidcheck`
+
+This tool checks whether a process specified in a PID file or directly by PID is currently running. It reads the PID
+from a file or a command line argument and verifies that the process exists using the `kill(pid, 0)` system call.
+
+> [!NOTE]
+> The zero signal (`kill(pid, 0)`) does not actually send a signal but performs error checking to determine whether
+> the process exists and whether the current user has permission to send signals to it.
+
+It may be useful for monitoring daemon processes inside containers that do not open any kind of network ports, but
+write their PID to a file.
+
+```
+Options:
+  -h, --help               Show this help message
+  -f, --file               Path to PID file (env: CHECK_PIDFILE)
+      --file-env           Change env variable name for --file (current: CHECK_PIDFILE)
+  -p, --pid                Process ID to check (env: CHECK_PID)
+      --pid-env            Change env variable name for --pid (current: CHECK_PID)
+```
+
+> [!NOTE]
+> The `--file` and `--pid` options are mutually exclusive and cannot be used together.
+
+Here is an example of how to create and write a PID file in your Go app:
+
+```go
+package main
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+)
+
+func main() {
+	pidFile := "/var/run/myapp.pid"
+
+	// write the PID to the specified file
+	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+		panic(fmt.Errorf("failed to write PID file: %w", err))
+	}
+
+	defer func() { _ = os.Remove(pidFile) }() // remove PID file on exit
+
+	// ... the rest of your app
+}
+```
+
+And then use `pidcheck` in your Dockerfile:
+
+```Dockerfile
+HEALTHCHECK --interval=5s CMD ["pidcheck", "--file", "/var/run/myapp.pid"]
+```
+
+#### PID File Format
+
+The PID file should contain a single process ID number. Leading and trailing whitespace is automatically
+stripped. Any non-numeric content will result in an error.
 
 ## 🐋 Docker image
 
@@ -364,6 +425,37 @@ $ docker run --rm -d --name tcp-check tcp-check:local
 $ docker ps --filter 'name=tcp-check' --format '{{.Status}}'
 Up 7 seconds (healthy)
 $ docker kill tcp-check
+```
+
+</details>
+
+<details>
+  <summary><strong>🚀 Healthcheck for daemon process using pidcheck</strong></summary>
+
+This example demonstrates how to use `pidcheck` to monitor a daemon process inside a Docker container.
+
+> [!NOTE]
+> Since `nginx` exposes TCP port and even HTTP endpoint, we use here `pidcheck` just for demonstration purposes (better
+> to use `portcheck` or `httpcheck` in real-world scenarios).
+
+```Dockerfile
+FROM docker.io/library/nginx:1.25-alpine
+
+# import pidcheck from microcheck image
+COPY --from=ghcr.io/tarampampam/microcheck:1 /bin/pidcheck /bin/pidcheck
+
+# nginx writes its PID to /var/run/nginx.pid by default
+HEALTHCHECK --interval=5s --retries=2 CMD ["pidcheck", "--file", "/var/run/nginx.pid"]
+```
+
+Let's build it and run:
+
+```shell
+$ docker build -t pidcheck:local - < ./examples/pidcheck.Dockerfile
+$ docker run --rm -d --name pidcheck pidcheck:local
+$ docker ps --filter 'name=pidcheck' --format '{{.Status}}'
+Up 8 seconds (healthy)
+$ docker kill pidcheck
 ```
 
 </details>

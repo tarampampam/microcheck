@@ -480,7 +480,8 @@ static bool add_running_job(pid_t pid, pid_t pgid, int cmd_index) {
     size_t new_size;
 
     /* NOTE: __builtin_mul_overflow is a GCC/Clang built-in.
-     * This code requires compilation with GCC or Clang (or compatible compilers).
+     * This code requires compilation with GCC or Clang (or compatible
+     * compilers).
      */
     if (__builtin_mul_overflow(sizeof(job_t), (size_t)new_capacity,
                                &new_size)) {
