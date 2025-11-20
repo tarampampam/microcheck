@@ -10,7 +10,6 @@
 /pidcheck
 
 ## Temp dirs & trash
-/libs
 /.test-certs
 /dist
 /temp

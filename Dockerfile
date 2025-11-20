@@ -38,8 +38,8 @@ FROM scratch AS runtime
 
 ARG APP_VERSION="0.0.0"
 
+# docs: <https://github.com/opencontainers/image-spec/blob/master/annotations.md>
 LABEL \
-    # Docs: <https://github.com/opencontainers/image-spec/blob/master/annotations.md>
     org.opencontainers.image.title="microcheck" \
     org.opencontainers.image.description="Lightweight health check utilities for Docker containers" \
     org.opencontainers.image.url="https://github.com/tarampampam/microcheck" \

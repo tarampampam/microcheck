@@ -1,2 +1,5 @@
 ## Generated version
 /version.h
+
+## Any object files
+*.o
