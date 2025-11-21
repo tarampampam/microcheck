@@ -75,6 +75,10 @@ void free_cli_app(cli_app_state_t *state) {
 
 // Create a new flag state based on the provided metadata.
 static flag_state_t *new_flag(const flag_meta_t *meta) {
+  if (!meta) {
+    return NULL;
+  }
+
   flag_state_t *flag = malloc(sizeof(flag_state_t));
   if (!flag) {
     return NULL;
@@ -282,6 +286,12 @@ char *app_help_text(const cli_app_state_t *state) {
           f->meta->short_name ? strlen(f->meta->short_name) : 0;
       const size_t long_len =
           f->meta->long_name ? strlen(f->meta->long_name) : 0;
+
+      // check for overflow when adding lengths
+      if (short_len > SIZE_MAX - long_len) {
+        goto fail; // overflow would occur
+      }
+
       const size_t total_len = short_len + long_len;
       if (total_len > max_flag_len) {
         max_flag_len = total_len;
@@ -331,8 +341,24 @@ char *app_help_text(const cli_app_state_t *state) {
       // pad to align descriptions
       const size_t flag_len = strlen(flag_tmp);
       const size_t pad = 8; // spaces between flag and description
+
+      // check for overflow in padding calculation
+      if (max_flag_len > SIZE_MAX - pad || flag_len > max_flag_len + pad) {
+        free(flag_tmp);
+
+        goto fail;
+      }
+
       if (flag_len < max_flag_len + pad) {
         const size_t spaces_needed = max_flag_len + pad - flag_len;
+
+        // check for overflow in spaces allocation
+        if (spaces_needed > SIZE_MAX - 1) {
+          free(flag_tmp);
+
+          goto fail;
+        }
+
         char *spaces = malloc(spaces_needed + 1);
         if (!spaces) {
           free(flag_tmp);
@@ -392,7 +418,7 @@ char *app_help_text(const cli_app_state_t *state) {
 
 fail:
   free(buf);
-  free(tmp);
+  free(tmp); // safe to free NULL
 
   return NULL;
 }
@@ -412,8 +438,13 @@ static void free_string_list(char **list, const size_t count) {
 
 // Helper: Append a string to a dynamic buffer, resizing as needed.
 static bool append_str(char **buffer, size_t *len, size_t *cap, const char *s) {
+  // validate all pointer parameters
+  if (!buffer || !len || !cap) {
+    return false;
+  }
+
   if (!s) {
-    return true;
+    return true; // nothing to append, but not an error
   }
 
   const size_t sLen = strlen(s);
