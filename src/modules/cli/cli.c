@@ -186,8 +186,20 @@ flag_state_t *app_add_flag(cli_app_state_t *state, const flag_meta_t *meta) {
 
   // grow array capacity if needed (double strategy)
   if (state->flags.count == state->flags.capacity) {
-    const size_t new_capacity =
-        state->flags.capacity ? state->flags.capacity * 2 : 4;
+    size_t new_capacity;
+
+    if (state->flags.capacity == 0) {
+      new_capacity = 4;
+    } else {
+      // check for overflow before doubling capacity
+      if (state->flags.capacity > SIZE_MAX / 2) {
+        free_flag_state(flag);
+
+        return NULL;
+      }
+
+      new_capacity = state->flags.capacity * 2;
+    }
 
     // check for overflow in allocation size calculation
     if (new_capacity > SIZE_MAX / sizeof(flag_state_t *)) {
@@ -298,6 +310,8 @@ char *app_help_text(const cli_app_state_t *state) {
       }
     }
 
+    const size_t max_with_pad = max_flag_len + 7 + 2;
+
     // append each flag
     for (size_t i = 0; i < state->flags.count; i++) {
       const flag_state_t *f = state->flags.list[i];
@@ -308,49 +322,32 @@ char *app_help_text(const cli_app_state_t *state) {
                      f->meta->long_name) == -1) {
           goto fail;
         }
-
-        if (!append_str(&buf, &len, &cap, flag_tmp)) {
-          free(flag_tmp);
-
-          goto fail;
-        }
       } else if (f->meta->short_name) {
         if (asprintf(&flag_tmp, "  -%s", f->meta->short_name) == -1) {
-          goto fail;
-        }
-
-        if (!append_str(&buf, &len, &cap, flag_tmp)) {
-          free(flag_tmp);
-
           goto fail;
         }
       } else if (f->meta->long_name) {
         if (asprintf(&flag_tmp, "      --%s", f->meta->long_name) == -1) {
           goto fail;
         }
-
-        if (!append_str(&buf, &len, &cap, flag_tmp)) {
-          free(flag_tmp);
-
-          goto fail;
-        }
       } else {
+        // skip flags with no names (should not happen due to app_add_flag
+        // validation)
         continue;
       }
 
-      // pad to align descriptions
-      const size_t flag_len = strlen(flag_tmp);
-      const size_t pad = 8; // spaces between flag and description
-
-      // check for overflow in padding calculation
-      if (max_flag_len > SIZE_MAX - pad || flag_len > max_flag_len + pad) {
+      // at this point flag_tmp is guaranteed to be valid and non-NULL
+      if (!append_str(&buf, &len, &cap, flag_tmp)) {
         free(flag_tmp);
 
         goto fail;
       }
 
-      if (flag_len < max_flag_len + pad) {
-        const size_t spaces_needed = max_flag_len + pad - flag_len;
+      // pad to align descriptions
+      const size_t flag_len = strlen(flag_tmp);
+
+      if (flag_len < max_with_pad) {
+        const size_t spaces_needed = (max_with_pad - flag_len);
 
         // check for overflow in spaces allocation
         if (spaces_needed > SIZE_MAX - 1) {
@@ -388,6 +385,102 @@ char *app_help_text(const cli_app_state_t *state) {
         }
       }
 
+      // append default value based on type
+      char *default_str = NULL;
+      switch (f->meta->type) {
+      case FLAG_TYPE_BOOL:
+        // booleans typically don't show default in CLI help
+        break;
+
+      case FLAG_TYPE_STRING:
+        if (f->meta->default_value.string_value) {
+          if (asprintf(&default_str, " (default: \"%s\")",
+                       f->meta->default_value.string_value) == -1) {
+            free(flag_tmp);
+
+            goto fail;
+          }
+
+          if (!append_str(&buf, &len, &cap, default_str)) {
+            free(default_str);
+            free(flag_tmp);
+
+            goto fail;
+          }
+
+          free(default_str);
+          default_str = NULL;
+        }
+
+        break;
+
+      case FLAG_TYPE_STRINGS:
+        if (f->meta->default_value.strings_value.count > 0) {
+          // start building the strings list representation
+          if (!append_str(&buf, &len, &cap, " (default: [")) {
+            free(flag_tmp);
+
+            goto fail;
+          }
+
+          for (size_t j = 0; j < f->meta->default_value.strings_value.count;
+               j++) {
+            const char *str_val = f->meta->default_value.strings_value.list[j];
+
+            // format: "value", or "value" for last item
+            const bool is_last =
+                (j + 1 >= f->meta->default_value.strings_value.count);
+
+            if (asprintf(&default_str, "\"%s\"%s", str_val,
+                         is_last ? "" : ", ") == -1) {
+              free(flag_tmp);
+
+              goto fail;
+            }
+
+            if (!append_str(&buf, &len, &cap, default_str)) {
+              free(default_str);
+              free(flag_tmp);
+
+              goto fail;
+            }
+
+            free(default_str);
+            default_str = NULL;
+          }
+
+          if (!append_str(&buf, &len, &cap, "])")) {
+            free(flag_tmp);
+
+            goto fail;
+          }
+        }
+
+        break;
+
+      default:
+        break;
+      }
+
+      // append environment variable if present
+      if (f->meta->env_variable) {
+        char *env_str = NULL;
+        if (asprintf(&env_str, " [$%s]", f->meta->env_variable) == -1) {
+          free(flag_tmp);
+
+          goto fail;
+        }
+
+        if (!append_str(&buf, &len, &cap, env_str)) {
+          free(env_str);
+          free(flag_tmp);
+
+          goto fail;
+        }
+
+        free(env_str);
+      }
+
       if (!append_str(&buf, &len, &cap, "\n")) {
         free(flag_tmp);
 
@@ -395,12 +488,13 @@ char *app_help_text(const cli_app_state_t *state) {
       }
 
       free(flag_tmp);
+      flag_tmp = NULL; // prevent use-after-free in next iteration
     }
   }
 
   // examples
   if (state->meta->examples) {
-    if (asprintf(&tmp, "Examples:\n%s", state->meta->examples) == -1) {
+    if (asprintf(&tmp, "\nExamples:\n%s", state->meta->examples) == -1) {
       goto fail;
     }
 
@@ -430,7 +524,7 @@ static void free_string_list(char **list, const size_t count) {
   }
 
   for (size_t i = 0; i < count; i++) {
-    free(list[i]);
+    free(list[i]); // safe to call on NULL per C standard
   }
 
   free(list);
@@ -451,7 +545,7 @@ static bool append_str(char **buffer, size_t *len, size_t *cap, const char *s) {
 
   // check for potential overflow before performing addition
   if (sLen > SIZE_MAX - *len - 1) {
-    return false;  // overflow would occur
+    return false; // overflow would occur
   }
 
   if (*len + sLen + 1 > *cap) {
@@ -466,6 +560,7 @@ static bool append_str(char **buffer, size_t *len, size_t *cap, const char *s) {
       new_cap *= 2;
     }
 
+    // on failure, realloc leaves original buffer unchanged - this is correct
     char *new_buf = realloc(*buffer, new_cap);
     if (!new_buf) {
       return false;

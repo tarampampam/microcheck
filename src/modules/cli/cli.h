@@ -6,9 +6,9 @@
 
 // Flag type enumeration, describes the kind of data the flag stores.
 typedef enum {
-  FLAG_TYPE_BOOL,    // boolean flag (on/off)
-  FLAG_TYPE_STRING,  // single string value
-  FLAG_TYPE_STRINGS  // multiple string values (list)
+  FLAG_TYPE_BOOL,   // boolean flag (on/off)
+  FLAG_TYPE_STRING, // single string value
+  FLAG_TYPE_STRINGS // multiple string values (list)
 } FlagType;
 
 // Metadata for a single CLI flag (immutable descriptor).
@@ -19,7 +19,7 @@ typedef struct {
   const char *description;  // Human-readable explanation for this flag
   const char *env_variable; // Optional environment variable name to read from
 
-  const FlagType type;      // Type of value this flag stores
+  const FlagType type; // Type of value this flag stores
 
   // default value for the flag (constant, type depends on 'type' field)
   union {
