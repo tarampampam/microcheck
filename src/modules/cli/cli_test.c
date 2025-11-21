@@ -42,8 +42,9 @@ static const cli_app_meta_t EXAMPLE_APP = {.name = "testapp",
 
 void assert_string_equal(const char *expected, const char *actual) {
   if (expected == NULL && actual == NULL) {
-    return; // оба NULL — считаем равными
+    return; // both NULL — consider equal
   }
+
   if (expected == NULL || actual == NULL) {
     fprintf(stderr,
             "String mismatch:\n"
@@ -60,7 +61,6 @@ void assert_string_equal(const char *expected, const char *actual) {
             "  actual:   \"%s\"\n",
             expected, actual);
 
-    /* Можно даже найти первую разницу */
     size_t i = 0;
     while (expected[i] && actual[i] && expected[i] == actual[i]) {
       i++;

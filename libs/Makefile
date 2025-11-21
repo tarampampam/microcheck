@@ -20,7 +20,7 @@ mbedtls4:
 		cd $@/build; \
 		CC=$(CC) cmake \
 			-DCMAKE_BUILD_TYPE=MinSizeRel \
-		  -DCMAKE_C_FLAGS="-Os -ffunction-sections -fdata-sections" \
+			-DCMAKE_C_FLAGS="-Os -ffunction-sections -fdata-sections" \
 			-DENABLE_TESTING=OFF \
 			-DENABLE_PROGRAMS=OFF \
 			-DUSE_SHARED_MBEDTLS_LIBRARY=OFF \

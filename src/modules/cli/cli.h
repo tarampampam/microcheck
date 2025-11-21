@@ -70,15 +70,20 @@ typedef struct {
 } cli_app_state_t;
 
 // Create a new CLI application with the provided metadata.
+// Returns pointer to newly created CLI application state,
+// or NULL on allocation failure or if meta is NULL.
 cli_app_state_t *new_cli_app(const cli_app_meta_t *meta);
 
 // Free a CLI application and all associated resources.
 void free_cli_app(cli_app_state_t *state);
 
 // Add a new flag to the application.
+// Returns pointer to the newly added flag, or NULL on allocation failure or if
+// the flag has neither short_name nor long_name.
 flag_state_t *app_add_flag(cli_app_state_t *state, const flag_meta_t *meta);
 
 // Generate formatted help text for the application.
+// The returned string is dynamically allocated and must be freed by the caller.
 char *app_help_text(const cli_app_state_t *state);
 
 #endif
