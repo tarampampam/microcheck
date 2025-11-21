@@ -1,8 +1,8 @@
 #include "cli.h"
+
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-static void free_string_list(char **list, const size_t count);
 
 // Allocate and initialize a new CLI application state.
 cli_app_state_t *new_cli_app(const cli_app_meta_t *meta) {
@@ -23,6 +23,8 @@ cli_app_state_t *new_cli_app(const cli_app_meta_t *meta) {
 
   return state;
 }
+
+static void free_string_list(char **list, const size_t count);
 
 // Free dynamically allocated memory inside a flag_state_t.
 void free_flag_state(flag_state_t *flag) {
@@ -71,7 +73,7 @@ void free_cli_app(cli_app_state_t *state) {
 }
 
 // Create a new flag state based on the provided metadata.
-flag_state_t *new_flag(const flag_meta_t *meta) {
+static flag_state_t *new_flag(const flag_meta_t *meta) {
   if (!meta) {
     return NULL;
   }
@@ -141,6 +143,10 @@ flag_state_t *app_add_flag(cli_app_state_t *state, const flag_meta_t *meta) {
     return NULL;
   }
 
+  if (!meta->short_name && !meta->long_name) {
+    return NULL; // must have at least one name
+  }
+
   flag_state_t *flag = new_flag(meta);
   if (!flag) {
     return NULL;
@@ -168,6 +174,182 @@ flag_state_t *app_add_flag(cli_app_state_t *state, const flag_meta_t *meta) {
   return flag;
 }
 
+static bool append_str(char **buffer, size_t *len, size_t *cap, const char *s);
+
+char *app_help_text(const cli_app_state_t *state) {
+  if (!state || !state->meta) {
+    return NULL;
+  }
+
+  char *buf = NULL;
+  size_t len = 0, cap = 0;
+  char *tmp = NULL;
+
+  // version
+  if (asprintf(&tmp, "%s version %s\n\n", state->meta->name,
+               state->meta->version ? state->meta->version : "unknown") == -1) {
+    return NULL;
+  }
+
+  if (!append_str(&buf, &len, &cap, tmp)) {
+    goto fail;
+  }
+
+  free(tmp);
+
+  // description
+  if (state->meta->description) {
+    if (asprintf(&tmp, "%s\n\n", state->meta->description) == -1) {
+      goto fail;
+    }
+
+    if (!append_str(&buf, &len, &cap, tmp)) {
+      goto fail;
+    }
+
+    free(tmp);
+  }
+
+  // usage
+  if (state->meta->usage) {
+    if (asprintf(&tmp, "Usage: %s %s\n\n", state->meta->name,
+                 state->meta->usage) == -1) {
+      goto fail;
+    }
+
+    if (!append_str(&buf, &len, &cap, tmp)) {
+      goto fail;
+    }
+
+    free(tmp);
+  }
+
+  // options (flags)
+  if (state->flags.count > 0) {
+    if (!append_str(&buf, &len, &cap, "Options:\n")) {
+      goto fail;
+    }
+
+    // get the longest flag string length for alignment
+    size_t max_flag_len = 0;
+    for (size_t i = 0; i < state->flags.count; i++) {
+      const flag_state_t *f = state->flags.list[i];
+      const size_t short_len =
+          f->meta->short_name ? strlen(f->meta->short_name) : 0;
+      const size_t long_len =
+          f->meta->long_name ? strlen(f->meta->long_name) : 0;
+      const size_t total_len = short_len + long_len;
+      if (total_len > max_flag_len) {
+        max_flag_len = total_len;
+      }
+    }
+
+    // append each flag
+    for (size_t i = 0; i < state->flags.count; i++) {
+      const flag_state_t *f = state->flags.list[i];
+      char *flag_tmp = NULL;
+
+      if (f->meta->short_name && f->meta->long_name) {
+        if (asprintf(&flag_tmp, "  -%s, --%s", f->meta->short_name,
+                     f->meta->long_name) == -1) {
+          goto fail;
+        }
+
+        if (!append_str(&buf, &len, &cap, flag_tmp)) {
+          free(flag_tmp);
+
+          goto fail;
+        }
+      } else if (f->meta->short_name) {
+        if (asprintf(&flag_tmp, "  -%s", f->meta->short_name) == -1) {
+          goto fail;
+        }
+
+        if (!append_str(&buf, &len, &cap, flag_tmp)) {
+          free(flag_tmp);
+
+          goto fail;
+        }
+      } else if (f->meta->long_name) {
+        if (asprintf(&flag_tmp, "      --%s", f->meta->long_name) == -1) {
+          goto fail;
+        }
+
+        if (!append_str(&buf, &len, &cap, flag_tmp)) {
+          free(flag_tmp);
+
+          goto fail;
+        }
+      } else {
+        continue;
+      }
+
+      // pad to align descriptions
+      const size_t flag_len = strlen(flag_tmp);
+      const size_t pad = 8; // spaces between flag and description
+      if (flag_len < max_flag_len + pad) {
+        const size_t spaces_needed = max_flag_len + pad - flag_len;
+        char *spaces = malloc(spaces_needed + 1);
+        if (!spaces) {
+          free(flag_tmp);
+
+          goto fail;
+        }
+
+        memset(spaces, ' ', spaces_needed);
+        spaces[spaces_needed] = '\0';
+
+        if (!append_str(&buf, &len, &cap, spaces)) {
+          free(spaces);
+          free(flag_tmp);
+
+          goto fail;
+        }
+
+        free(spaces);
+      }
+
+      // append description
+      if (f->meta->description) {
+        if (!append_str(&buf, &len, &cap, f->meta->description)) {
+          free(flag_tmp);
+
+          goto fail;
+        }
+      }
+
+      if (!append_str(&buf, &len, &cap, "\n")) {
+        free(flag_tmp);
+
+        goto fail;
+      }
+
+      free(flag_tmp);
+    }
+  }
+
+  // examples
+  if (state->meta->examples) {
+    if (asprintf(&tmp, "Examples:\n%s", state->meta->examples) == -1) {
+      goto fail;
+    }
+
+    if (!append_str(&buf, &len, &cap, tmp)) {
+      goto fail;
+    }
+
+    free(tmp);
+  }
+
+  return buf; // caller must free()
+
+fail:
+  free(buf);
+  free(tmp);
+
+  return NULL;
+}
+
 // Helper: Free a list of dynamically allocated strings.
 static void free_string_list(char **list, const size_t count) {
   if (!list) {
@@ -179,4 +361,34 @@ static void free_string_list(char **list, const size_t count) {
   }
 
   free(list);
+}
+
+// Helper: Append a string to a dynamic buffer, resizing as needed.
+static bool append_str(char **buffer, size_t *len, size_t *cap, const char *s) {
+  if (!s) {
+    return true;
+  }
+
+  const size_t sLen = strlen(s);
+  if (*len + sLen + 1 > *cap) {
+    size_t new_cap = (*cap == 0) ? 128 : *cap;
+    while (new_cap < *len + sLen + 1) {
+      new_cap *= 2;
+    }
+
+    char *new_buf = realloc(*buffer, new_cap);
+    if (!new_buf) {
+      return false;
+    }
+
+    *buffer = new_buf;
+    *cap = new_cap;
+  }
+
+  memcpy(*buffer + *len, s, sLen);
+
+  *len += sLen;
+  (*buffer)[*len] = '\0';
+
+  return true;
 }

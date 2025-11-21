@@ -70,4 +70,7 @@ void free_cli_app(cli_app_state_t *state);
 // Flag management.
 flag_state_t *app_add_flag(cli_app_state_t *state, const flag_meta_t *meta);
 
+// Help text generation.
+char *app_help_text(const cli_app_state_t *state);
+
 #endif

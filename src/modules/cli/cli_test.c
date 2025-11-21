@@ -40,7 +40,7 @@ static const cli_app_meta_t EXAMPLE_APP = {
   .name = "testapp",
   .version = "1.0.0",
   .description = "A test CLI application",
-  .usage = "testapp [options]",
+  .usage = "[options]",
   .examples = "testapp --help"
 };
 
@@ -49,7 +49,7 @@ void assert_string_equal(const char* a, const char* b)
   assert(strcmp(a, b) == 0);
 }
 
-void test_cli_app_t()
+void test_app_add_flag()
 {
   cli_app_state_t* app = new_cli_app(&EXAMPLE_APP);
   assert(app != NULL);
@@ -81,9 +81,31 @@ void test_cli_app_t()
   free_cli_app(app);
 }
 
+void test_app_help() {
+  cli_app_state_t* app = new_cli_app(&EXAMPLE_APP);
+
+  app_add_flag(app, &EXAMPLE_BOOL_FLAG);
+  app_add_flag(app, &EXAMPLE_STRING_FLAG);
+  app_add_flag(app, &EXAMPLE_STRINGS_FLAG);
+
+  app_add_flag(app, &(flag_meta_t){
+    .short_name = "x",
+    .description = "Short only flag",
+    .type = FLAG_TYPE_BOOL,
+  });
+  app_add_flag(app, &(flag_meta_t){
+    .long_name = "xxx",
+    .description = "Long only flag",
+    .type = FLAG_TYPE_BOOL,
+  });
+
+  printf("%s\n", app_help_text(app));
+}
+
 int main()
 {
-  test_cli_app_t();
+  test_app_add_flag();
+  test_app_help();
 
   return 0;
 }
