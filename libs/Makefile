@@ -2,6 +2,9 @@
 
 CC := musl-gcc
 
+.DEFAULT_GOAL: all
+all: mbedtls4
+
 mbedtls4:
 	@if [ ! -d $@ ]; then \
 		wget -O ./mbedtls.tar.bz2 \
@@ -25,5 +28,6 @@ mbedtls4:
 		&& cmake --build . --target lib -j$(shell nproc); \
 	fi
 
+.PHONY: clean
 clean:
 	-rm -r ./mbedtls4

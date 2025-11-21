@@ -12,8 +12,6 @@ C_LDFLAGS        = -static -Wl,--gc-sections
 CFLAGS           = $(C_SIZE_FLAGS) $(C_SECURITY_FLAGS) $(C_WARNING_FLAGS) $(C_STRIP_FLAGS) $(C_LDFLAGS)
 STRIP_FLAGS      = -s -R .comment -R .gnu.version -R .note -R .note.ABI-tag
 
-.PHONY: src/version.h clean
-
 .DEFAULT_GOAL: all
 all: httpcheck httpscheck portcheck parallel pidcheck
 
@@ -61,7 +59,8 @@ SRC_FILES := $(shell find src -type f \( -name '*.c' -o -name '*.h' \))
 fmt: $(SRC_FILES)
 	clang-format -i $^
 
-test: httpcheck httpscheck parallel pidcheck
+test: src/modules/bin/cli_test httpcheck httpscheck parallel pidcheck
+	./src/modules/bin/cli_test
 	python3 ./test/httpcheck.py --bin ./httpcheck
 	python3 ./test/httpcheck.py --bin ./httpscheck --https
 	python3 ./test/httpcheck.py --bin ./httpscheck
@@ -70,4 +69,7 @@ test: httpcheck httpscheck parallel pidcheck
 
 .PHONY: clean
 clean:
-	-rm ./cli_test ./httpcheck ./httpscheck ./portcheck ./parallel ./pidcheck
+	-rm \
+		./src/modules/obj/*.o \
+		./src/modules/bin/cli_test \
+		./httpcheck ./httpscheck ./portcheck ./parallel ./pidcheck

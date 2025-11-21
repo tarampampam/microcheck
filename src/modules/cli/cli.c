@@ -236,9 +236,10 @@ char *app_help_text(const cli_app_state_t *state) {
   size_t len = 0, cap = 0;
   char *tmp = NULL;
 
-  // version
-  if (asprintf(&tmp, "%s version %s\n\n", state->meta->name,
-               state->meta->version ? state->meta->version : "unknown") == -1) {
+  // app name and version
+  if (asprintf(&tmp, "%s%s%s", state->meta->name ? state->meta->name : "app",
+               state->meta->version ? " " : "",
+               state->meta->version ? state->meta->version : "") == -1) {
     return NULL;
   }
 
@@ -253,7 +254,7 @@ char *app_help_text(const cli_app_state_t *state) {
 
   // description
   if (state->meta->description) {
-    if (asprintf(&tmp, "%s\n\n", state->meta->description) == -1) {
+    if (asprintf(&tmp, "\n\n%s", state->meta->description) == -1) {
       goto fail;
     }
 
@@ -269,7 +270,7 @@ char *app_help_text(const cli_app_state_t *state) {
 
   // usage
   if (state->meta->usage) {
-    if (asprintf(&tmp, "Usage: %s %s\n\n", state->meta->name,
+    if (asprintf(&tmp, "\n\nUsage: %s %s", state->meta->name,
                  state->meta->usage) == -1) {
       goto fail;
     }
@@ -286,7 +287,7 @@ char *app_help_text(const cli_app_state_t *state) {
 
   // options (flags)
   if (state->flags.count > 0) {
-    if (!append_str(&buf, &len, &cap, "Options:\n")) {
+    if (!append_str(&buf, &len, &cap, "\n\nOptions:\n")) {
       goto fail;
     }
 
@@ -310,7 +311,10 @@ char *app_help_text(const cli_app_state_t *state) {
       }
     }
 
-    const size_t max_with_pad = max_flag_len + 7 + 2;
+    const size_t max_with_pad = max_flag_len + 9;
+    if (max_flag_len > SIZE_MAX - 9) { // check for overflow
+      goto fail;
+    }
 
     // append each flag
     for (size_t i = 0; i < state->flags.count; i++) {
@@ -481,10 +485,13 @@ char *app_help_text(const cli_app_state_t *state) {
         free(env_str);
       }
 
-      if (!append_str(&buf, &len, &cap, "\n")) {
-        free(flag_tmp);
+      // append "\n" only if this is not the last flag
+      if (i + 1 < state->flags.count) {
+        if (!append_str(&buf, &len, &cap, "\n")) {
+          free(flag_tmp);
 
-        goto fail;
+          goto fail;
+        }
       }
 
       free(flag_tmp);
@@ -494,7 +501,7 @@ char *app_help_text(const cli_app_state_t *state) {
 
   // examples
   if (state->meta->examples) {
-    if (asprintf(&tmp, "\nExamples:\n%s", state->meta->examples) == -1) {
+    if (asprintf(&tmp, "\n\nExamples:\n%s", state->meta->examples) == -1) {
       goto fail;
     }
 

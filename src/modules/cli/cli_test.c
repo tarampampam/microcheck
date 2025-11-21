@@ -2,6 +2,7 @@
 #include <assert.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const flag_meta_t EXAMPLE_BOOL_FLAG = {
@@ -39,8 +40,35 @@ static const cli_app_meta_t EXAMPLE_APP = {.name = "testapp",
                                            .usage = "[options]",
                                            .examples = "testapp --help"};
 
-void assert_string_equal(const char *a, const char *b) {
-  assert(strcmp(a, b) == 0);
+void assert_string_equal(const char *expected, const char *actual) {
+  if (expected == NULL && actual == NULL) {
+    return; // оба NULL — считаем равными
+  }
+  if (expected == NULL || actual == NULL) {
+    fprintf(stderr,
+            "String mismatch:\n"
+            "  expected: \"%s\"\n"
+            "  actual:   \"%s\"\n",
+            expected ? expected : "(null)", actual ? actual : "(null)");
+    abort();
+  }
+
+  if (strcmp(expected, actual) != 0) {
+    fprintf(stderr,
+            "String mismatch:\n"
+            "  expected: \"%s\"\n"
+            "  actual:   \"%s\"\n",
+            expected, actual);
+
+    /* Можно даже найти первую разницу */
+    size_t i = 0;
+    while (expected[i] && actual[i] && expected[i] == actual[i]) {
+      i++;
+    }
+
+    fprintf(stderr, "  first difference at index %zu\n", i);
+    abort();
+  }
 }
 
 void test_app_add_flag() {
@@ -74,7 +102,72 @@ void test_app_add_flag() {
   free_cli_app(app);
 }
 
-void test_app_help() {
+void test_help_nothing() {
+  cli_app_state_t *app = new_cli_app(&(cli_app_meta_t){0});
+
+  char *help = app_help_text(app);
+  assert_string_equal("app", help);
+
+  free(help);
+  free_cli_app(app);
+}
+
+void test_help_bool_flag_only() {
+  cli_app_state_t *app = new_cli_app(&(cli_app_meta_t){0});
+
+  app_add_flag(app, &EXAMPLE_BOOL_FLAG);
+
+  char *help = app_help_text(app);
+  assert_string_equal("app\n\n"
+                      "Options:\n"
+                      "  -b, --bool-flag  A boolean flag [$BOOL_FLAG]",
+                      help);
+
+  free(help);
+  free_cli_app(app);
+}
+
+void test_help_bool_and_string_flags() {
+  cli_app_state_t *app = new_cli_app(&(cli_app_meta_t){0});
+
+  app_add_flag(app, &EXAMPLE_BOOL_FLAG);
+  app_add_flag(app, &EXAMPLE_STRING_FLAG);
+
+  char *help = app_help_text(app);
+  assert_string_equal("app\n\n"
+                      "Options:\n"
+                      "  -b, --bool-flag    A boolean flag [$BOOL_FLAG]\n"
+                      "  -s, --string-flag  A string flag (default: "
+                      "\"default\") [$STRING_FLAG]",
+                      help);
+
+  free(help);
+  free_cli_app(app);
+}
+
+void test_help_bool_string_and_strings_flags() {
+  cli_app_state_t *app = new_cli_app(&(cli_app_meta_t){0});
+
+  app_add_flag(app, &EXAMPLE_BOOL_FLAG);
+  app_add_flag(app, &EXAMPLE_STRING_FLAG);
+  app_add_flag(app, &EXAMPLE_STRINGS_FLAG);
+
+  char *help = app_help_text(app);
+  assert_string_equal(
+      "app\n\n"
+      "Options:\n"
+      "  -b, --bool-flag     A boolean flag [$BOOL_FLAG]\n"
+      "  -s, --string-flag   A string flag (default: "
+      "\"default\") [$STRING_FLAG]\n"
+      "  -m, --strings-flag  A multiple strings flag (default: [\"one\", "
+      "\"two\", \"three\"]) [$MULTIPLE_STRINGS_FLAG]",
+      help);
+
+  free(help);
+  free_cli_app(app);
+}
+
+void test_help_with_custom_flags() {
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
   app_add_flag(app, &EXAMPLE_BOOL_FLAG);
@@ -92,12 +185,35 @@ void test_app_help() {
                         .type = FLAG_TYPE_BOOL,
                     });
 
-  printf("%s\n", app_help_text(app));
+  char *help = app_help_text(app);
+
+  assert_string_equal(
+      "testapp 1.0.0\n\n"
+      "A test CLI application\n\n"
+      "Usage: testapp [options]\n\n"
+      "Options:\n"
+      "  -b, --bool-flag     A boolean flag [$BOOL_FLAG]\n"
+      "  -s, --string-flag   A string flag (default: \"default\") "
+      "[$STRING_FLAG]\n"
+      "  -m, --strings-flag  A multiple strings flag (default: [\"one\", "
+      "\"two\", \"three\"]) [$MULTIPLE_STRINGS_FLAG]\n"
+      "  -x                  Short only flag\n"
+      "      --xxx           Long only flag\n\n"
+      "Examples:\n"
+      "testapp --help",
+      help);
+
+  free(help);
+  free_cli_app(app);
 }
 
 int main() {
   test_app_add_flag();
-  test_app_help();
+  test_help_nothing();
+  test_help_bool_flag_only();
+  test_help_bool_and_string_flags();
+  test_help_bool_string_and_strings_flags();
+  test_help_with_custom_flags();
 
   return 0;
 }

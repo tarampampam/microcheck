@@ -4,4 +4,4 @@
 ## Except the following files and directories
 !/src
 !/Makefile
-!/libs/patches
+!/libs
