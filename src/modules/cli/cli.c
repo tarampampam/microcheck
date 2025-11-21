@@ -1,5 +1,6 @@
 #include "cli.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,7 +16,7 @@ cli_app_state_t *new_cli_app(const cli_app_meta_t *meta) {
     return NULL;
   }
 
-  // Initialize fields to safe defaults
+  // initialize fields to safe defaults
   state->meta = meta;
   state->flags.list = NULL;
   state->flags.count = 0;
@@ -24,7 +25,7 @@ cli_app_state_t *new_cli_app(const cli_app_meta_t *meta) {
   return state;
 }
 
-static void free_string_list(char **list, const size_t count);
+static void free_string_list(char **list, size_t count);
 
 // Free dynamically allocated memory inside a flag_state_t.
 void free_flag_state(flag_state_t *flag) {
@@ -74,16 +75,15 @@ void free_cli_app(cli_app_state_t *state) {
 
 // Create a new flag state based on the provided metadata.
 static flag_state_t *new_flag(const flag_meta_t *meta) {
-  if (!meta) {
-    return NULL;
-  }
-
   flag_state_t *flag = malloc(sizeof(flag_state_t));
   if (!flag) {
     return NULL;
   }
 
   flag->meta = meta;
+
+  // initialize union to safe state before setting actual value
+  memset(&flag->value, 0, sizeof(flag->value));
 
   switch (meta->type) {
   case FLAG_TYPE_BOOL:
@@ -108,6 +108,20 @@ static flag_state_t *new_flag(const flag_meta_t *meta) {
   case FLAG_TYPE_STRINGS:
     flag->value.strings_value.count = meta->default_value.strings_value.count;
     if (flag->value.strings_value.count > 0) {
+      // check for NULL list with non-zero count (invalid state)
+      if (!meta->default_value.strings_value.list) {
+        free(flag);
+
+        return NULL;
+      }
+
+      // check for overflow in allocation size
+      if (flag->value.strings_value.count > SIZE_MAX / sizeof(char *)) {
+        free(flag);
+
+        return NULL;
+      }
+
       flag->value.strings_value.list =
           malloc(sizeof(char *) * flag->value.strings_value.count);
       if (!flag->value.strings_value.list) {
@@ -117,6 +131,14 @@ static flag_state_t *new_flag(const flag_meta_t *meta) {
       }
 
       for (size_t i = 0; i < flag->value.strings_value.count; i++) {
+        // check for NULL string in list
+        if (!meta->default_value.strings_value.list[i]) {
+          free_string_list(flag->value.strings_value.list, i);
+          free(flag);
+
+          return NULL;
+        }
+
         flag->value.strings_value.list[i] =
             strdup(meta->default_value.strings_value.list[i]);
         if (!flag->value.strings_value.list[i]) {
@@ -131,6 +153,12 @@ static flag_state_t *new_flag(const flag_meta_t *meta) {
     }
 
     break;
+
+  default:
+    // unknown flag type - fail safely
+    free(flag);
+
+    return NULL;
   }
 
   return flag;
@@ -156,6 +184,13 @@ flag_state_t *app_add_flag(cli_app_state_t *state, const flag_meta_t *meta) {
   if (state->flags.count == state->flags.capacity) {
     const size_t new_capacity =
         state->flags.capacity ? state->flags.capacity * 2 : 4;
+
+    // check for overflow in allocation size calculation
+    if (new_capacity > SIZE_MAX / sizeof(flag_state_t *)) {
+      free_flag_state(flag);
+
+      return NULL;
+    }
 
     flag_state_t **new_list =
         realloc(state->flags.list, sizeof(flag_state_t *) * new_capacity);
@@ -192,10 +227,13 @@ char *app_help_text(const cli_app_state_t *state) {
   }
 
   if (!append_str(&buf, &len, &cap, tmp)) {
+    free(tmp);
+
     goto fail;
   }
 
   free(tmp);
+  tmp = NULL;
 
   // description
   if (state->meta->description) {
@@ -204,10 +242,13 @@ char *app_help_text(const cli_app_state_t *state) {
     }
 
     if (!append_str(&buf, &len, &cap, tmp)) {
+      free(tmp);
+
       goto fail;
     }
 
     free(tmp);
+    tmp = NULL;
   }
 
   // usage
@@ -218,10 +259,13 @@ char *app_help_text(const cli_app_state_t *state) {
     }
 
     if (!append_str(&buf, &len, &cap, tmp)) {
+      free(tmp);
+
       goto fail;
     }
 
     free(tmp);
+    tmp = NULL;
   }
 
   // options (flags)
@@ -335,10 +379,13 @@ char *app_help_text(const cli_app_state_t *state) {
     }
 
     if (!append_str(&buf, &len, &cap, tmp)) {
+      free(tmp);
+
       goto fail;
     }
 
     free(tmp);
+    tmp = NULL;
   }
 
   return buf; // caller must free()
@@ -370,9 +417,21 @@ static bool append_str(char **buffer, size_t *len, size_t *cap, const char *s) {
   }
 
   const size_t sLen = strlen(s);
+
+  // check for potential overflow before performing addition
+  if (sLen > SIZE_MAX - *len - 1) {
+    return false;  // overflow would occur
+  }
+
   if (*len + sLen + 1 > *cap) {
     size_t new_cap = (*cap == 0) ? 128 : *cap;
+
+    // ensure we don't overflow when doubling capacity
     while (new_cap < *len + sLen + 1) {
+      if (new_cap > SIZE_MAX / 2) {
+        return false; // cannot double without overflow
+      }
+
       new_cap *= 2;
     }
 
