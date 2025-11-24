@@ -1,304 +1,390 @@
 #include "cli.h"
 
+#include <ctype.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-// Allocate and initialize a new CLI application state.
-cli_app_state_t *new_cli_app(const cli_app_meta_t *meta) {
-  if (!meta) {
+/**
+ * Allocate and initialize a new CLI application state.
+ */
+cli_app_state_t *new_cli_app(const cli_app_meta_t *am) {
+  if (!am) {
     return NULL;
   }
 
-  cli_app_state_t *state = malloc(sizeof(cli_app_state_t));
-  if (!state) {
+  cli_app_state_t *app_state = malloc(sizeof(cli_app_state_t));
+  if (!app_state) {
     return NULL;
   }
 
   // initialize fields to safe defaults
-  state->meta = meta;
-  state->flags.list = NULL;
-  state->flags.count = 0;
-  state->flags.capacity = 0;
+  app_state->meta = am;
+  app_state->flags.list = NULL;
+  app_state->flags.count = 0;
+  app_state->args.list = NULL;
+  app_state->args.count = 0;
 
-  return state;
+  return app_state;
 }
 
-static void free_string_list(char **list, size_t count);
-
-// Free dynamically allocated memory inside a flag_state_t.
-void free_flag_state(flag_state_t *flag) {
-  if (!flag) {
+/**
+ * Free dynamically allocated memory inside a flag_state_t.
+ */
+static void free_flag_state(flag_state_t *fs) {
+  if (!fs) {
     return;
   }
 
-  if (!flag->meta) {
-    free(flag);
+  if (!fs->meta) {
+    free(fs);
 
     return;
   }
 
-  switch (flag->meta->type) {
+  switch (fs->meta->type) {
   case FLAG_TYPE_STRING:
-    free(flag->value.string_value); // free allocated string
+    free(fs->value.string_value); // free allocated string
 
     break;
 
   case FLAG_TYPE_STRINGS: // free each string
-    free_string_list(flag->value.strings_value.list,
-                     flag->value.strings_value.count);
+    for (size_t i = 0; i < fs->value.strings_value.count; i++) {
+      free(fs->value.strings_value.list[i]);
+    }
+
+    free(fs->value.strings_value.list);
 
     break;
 
   case FLAG_TYPE_BOOL:
   default:
-    break; // no allocated memory to free
+    break;
   }
 
-  free(flag);
+  free(fs);
 }
 
-// Free CLI application and all flags.
-void free_cli_app(cli_app_state_t *state) {
-  if (!state) {
+/**
+ * Free CLI application and all flags.
+ */
+void free_cli_app(cli_app_state_t *as) {
+  if (!as) {
     return;
   }
 
-  for (size_t i = 0; i < state->flags.count; i++) {
-    free_flag_state(state->flags.list[i]);
+  for (size_t i = 0; i < as->flags.count; i++) {
+    free_flag_state(as->flags.list[i]);
   }
 
-  free(state->flags.list);
-  free(state);
+  free(as->flags.list);
+  free(as->args.list);
+  free(as);
 }
 
-// Create a new flag state based on the provided metadata.
-static flag_state_t *new_flag(const flag_meta_t *meta) {
-  if (!meta) {
+/**
+ * Set the value of a boolean flag.
+ */
+static void set_flag_value_bool(flag_state_t *fs, const bool value) {
+  if (fs->meta->type != FLAG_TYPE_BOOL) {
+    return;
+  }
+
+  fs->value.bool_value = value;
+}
+
+/**
+ * Set the value of a string flag.
+ */
+static bool set_flag_value_string(flag_state_t *fs, const char *value) {
+  if (fs->meta->type != FLAG_TYPE_STRING) {
+    return false;
+  }
+
+  free(fs->value.string_value);
+
+  fs->value.string_value = strdup(value);
+  if (!fs->value.string_value) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Clear all strings from a multiple-strings flag.
+ */
+static void clear_flag_strings(flag_state_t *fs) {
+  // free existing strings if present
+  if (fs->value.strings_value.list) {
+    for (size_t i = 0; i < fs->value.strings_value.count; i++) {
+      free(fs->value.strings_value.list[i]);
+    }
+
+    free(fs->value.strings_value.list);
+  }
+
+  fs->value.strings_value.list = NULL;
+  fs->value.strings_value.count = 0;
+}
+
+/**
+ * Add a single string to a multiple-strings flag.
+ */
+static bool add_flag_value_strings(flag_state_t *fs, const char *value) {
+  if (!value) {
+    return false;
+  }
+
+  const size_t new_size = sizeof(char *) * (fs->value.strings_value.count + 1);
+
+  // allocate new list with increased size
+  char **new_list = realloc(fs->value.strings_value.list, new_size);
+  if (!new_list) {
+    return false;
+  }
+
+  // update list pointer
+  fs->value.strings_value.list = new_list;
+
+  // duplicate and add new string
+  fs->value.strings_value.list[fs->value.strings_value.count] = strdup(value);
+  if (!fs->value.strings_value.list[fs->value.strings_value.count]) {
+    return false;
+  }
+
+  // increment count
+  fs->value.strings_value.count++;
+
+  return true;
+}
+
+/**
+ * Set the value of a multiple-strings flag.
+ */
+static bool set_flag_value_strings(flag_state_t *fs, const char **values,
+                                   const size_t count) {
+  if (fs->meta->type != FLAG_TYPE_STRINGS) {
+    return false;
+  }
+
+  // clear existing strings
+  clear_flag_strings(fs);
+
+  // add new strings
+  for (size_t i = 0; i < count; i++) {
+    if (!values[i]) {
+      continue; // skip NULL values
+    }
+
+    if (!add_flag_value_strings(fs, values[i])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Create a new flag state based on the provided metadata.
+ */
+static flag_state_t *new_flag_state(const flag_meta_t *fm) {
+  flag_state_t *fs = malloc(sizeof(flag_state_t));
+  if (!fs) {
     return NULL;
   }
 
-  flag_state_t *flag = malloc(sizeof(flag_state_t));
-  if (!flag) {
-    return NULL;
-  }
-
-  flag->meta = meta;
+  // set metadata reference
+  fs->meta = fm;
 
   // initialize union to safe state before setting actual value
-  memset(&flag->value, 0, sizeof(flag->value));
+  memset(&fs->value, 0, sizeof(fs->value));
 
-  switch (meta->type) {
+  switch (fm->type) {
   case FLAG_TYPE_BOOL:
-    flag->value.bool_value = meta->default_value.bool_value;
+    // set default value if provided
+    if (fm->default_value.bool_value) {
+      set_flag_value_bool(fs, fm->default_value.bool_value);
+    } else {
+      set_flag_value_bool(fs, false); // default to false
+    }
 
     break;
 
   case FLAG_TYPE_STRING:
-    if (meta->default_value.string_value) {
-      flag->value.string_value = strdup(meta->default_value.string_value);
-      if (!flag->value.string_value) {
-        free(flag);
+    fs->value.string_value = NULL;
+
+    // set default string value if provided
+    if (fm->default_value.string_value) {
+      if (!set_flag_value_string(fs, fm->default_value.string_value)) {
+        free_flag_state(fs);
 
         return NULL;
       }
-    } else {
-      flag->value.string_value = NULL;
     }
 
     break;
 
   case FLAG_TYPE_STRINGS:
-    flag->value.strings_value.count = meta->default_value.strings_value.count;
-    if (flag->value.strings_value.count > 0) {
-      // check for NULL list with non-zero count (invalid state)
-      if (!meta->default_value.strings_value.list) {
-        free(flag);
+    fs->value.strings_value.list = NULL;
+    fs->value.strings_value.count = 0;
+
+    // set default strings if provided
+    if (fm->default_value.strings_value.list &&
+        fm->default_value.strings_value.count > 0) {
+      if (!set_flag_value_strings(fs, fm->default_value.strings_value.list,
+                                  fm->default_value.strings_value.count)) {
+        free_flag_state(fs);
 
         return NULL;
       }
-
-      // check for overflow in allocation size
-      if (flag->value.strings_value.count > SIZE_MAX / sizeof(char *)) {
-        free(flag);
-
-        return NULL;
-      }
-
-      flag->value.strings_value.list =
-          malloc(sizeof(char *) * flag->value.strings_value.count);
-      if (!flag->value.strings_value.list) {
-        free(flag);
-
-        return NULL;
-      }
-
-      for (size_t i = 0; i < flag->value.strings_value.count; i++) {
-        // check for NULL string in list
-        if (!meta->default_value.strings_value.list[i]) {
-          free_string_list(flag->value.strings_value.list, i);
-          free(flag);
-
-          return NULL;
-        }
-
-        flag->value.strings_value.list[i] =
-            strdup(meta->default_value.strings_value.list[i]);
-        if (!flag->value.strings_value.list[i]) {
-          free_string_list(flag->value.strings_value.list, i);
-          free(flag);
-
-          return NULL;
-        }
-      }
-    } else {
-      flag->value.strings_value.list = NULL;
     }
 
     break;
 
   default:
     // unknown flag type - fail safely
-    free(flag);
+    free(fs);
 
     return NULL;
   }
 
-  return flag;
+  return fs;
 }
 
-// Add a new flag to the CLI application.
-flag_state_t *app_add_flag(cli_app_state_t *state, const flag_meta_t *meta) {
-  // validate inputs
-  if (!state || !meta) {
+/**
+ * Add a new flag to the CLI application.
+ */
+flag_state_t *app_add_flag(cli_app_state_t *as, const flag_meta_t *fm) {
+  if (!as || !fm) {
     return NULL;
   }
 
-  if (!meta->short_name && !meta->long_name) {
+  if (!fm->short_name && !fm->long_name) {
     return NULL; // must have at least one name
   }
 
-  flag_state_t *flag = new_flag(meta);
-  if (!flag) {
+  flag_state_t *fs = new_flag_state(fm);
+  if (!fs) {
     return NULL;
   }
 
-  // grow array capacity if needed (double strategy)
-  if (state->flags.count == state->flags.capacity) {
-    size_t new_capacity;
+  // reallocate flags list to accommodate new flag
+  const size_t new_size = sizeof(flag_state_t *) * (as->flags.count + 1);
+  flag_state_t **new_list = realloc(as->flags.list, new_size);
+  if (!new_list) {
+    free_flag_state(fs);
 
-    if (state->flags.capacity == 0) {
-      new_capacity = 4;
-    } else {
-      // check for overflow before doubling capacity
-      if (state->flags.capacity > SIZE_MAX / 2) {
-        free_flag_state(flag);
-
-        return NULL;
-      }
-
-      new_capacity = state->flags.capacity * 2;
-    }
-
-    // check for overflow in allocation size calculation
-    if (new_capacity > SIZE_MAX / sizeof(flag_state_t *)) {
-      free_flag_state(flag);
-
-      return NULL;
-    }
-
-    flag_state_t **new_list =
-        realloc(state->flags.list, sizeof(flag_state_t *) * new_capacity);
-    if (!new_list) {
-      free_flag_state(flag);
-
-      return NULL;
-    }
-
-    state->flags.list = new_list;
-    state->flags.capacity = new_capacity;
+    return NULL;
   }
 
-  state->flags.list[state->flags.count++] = flag;
+  as->flags.list = new_list;
+  as->flags.list[as->flags.count] = fs;
+  as->flags.count++;
 
-  return flag;
+  return fs;
 }
 
-static bool append_str(char **buffer, size_t *len, size_t *cap, const char *s);
+/**
+ * Append formatted string to a dynamically allocated buffer.
+ * Reallocates buffer as needed.
+ *
+ * Returns the number of characters added (excluding null terminator),
+ * or 0 on error.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((format(printf, 2, 3)))
+#endif
+size_t
+str_add_f(char **dest, const char *fmt, ...) {
+  va_list args, args_copy;
 
+  // calculate required size for formatted string
+  va_start(args, fmt);
+  va_copy(args_copy, args);
+  const int add_len = vsnprintf(NULL, 0, fmt, args);
+  va_end(args);
+
+  if (add_len < 0) {
+    va_end(args_copy);
+
+    return 0;
+  }
+
+  const size_t add_len_u = (size_t)add_len;
+
+  // get current length
+  const size_t curr_len = *dest ? strlen(*dest) : 0;
+  const size_t new_len = curr_len + add_len_u + 1; // +1 for null terminator
+
+  // reallocate buffer
+  char *new_buf = realloc(*dest, new_len);
+  if (!new_buf) {
+    va_end(args_copy);
+
+    return 0;
+  }
+
+  *dest = new_buf;
+
+  // append formatted string
+  vsnprintf(*dest + curr_len, add_len_u + 1, fmt, args_copy);
+  va_end(args_copy);
+
+  return add_len_u;
+}
+
+/**
+ * Generate help text for the CLI application. On success, returns a
+ * dynamically allocated string containing the help text or NULL on failure.
+ *
+ * The called must free() the returned string.
+ */
 char *app_help_text(const cli_app_state_t *state) {
   if (!state || !state->meta) {
     return NULL;
   }
 
   char *buf = NULL;
-  size_t len = 0, cap = 0;
-  char *tmp = NULL;
 
   // app name and version
-  if (asprintf(&tmp, "%s%s%s", state->meta->name ? state->meta->name : "app",
-               state->meta->version ? " " : "",
-               state->meta->version ? state->meta->version : "") == -1) {
-    return NULL;
-  }
-
-  if (!append_str(&buf, &len, &cap, tmp)) {
-    free(tmp);
-
+  if (!str_add_f(&buf, "%s%s%s", state->meta->name ? state->meta->name : "app",
+                 state->meta->version ? " " : "",
+                 state->meta->version ? state->meta->version : "")) {
     goto fail;
   }
 
-  free(tmp);
-  tmp = NULL;
-
   // description
   if (state->meta->description) {
-    if (asprintf(&tmp, "\n\n%s", state->meta->description) == -1) {
+    if (!str_add_f(&buf, "\n\n%s", state->meta->description)) {
       goto fail;
     }
-
-    if (!append_str(&buf, &len, &cap, tmp)) {
-      free(tmp);
-
-      goto fail;
-    }
-
-    free(tmp);
-    tmp = NULL;
   }
 
   // usage
   if (state->meta->usage) {
-    if (asprintf(&tmp, "\n\nUsage: %s %s", state->meta->name,
-                 state->meta->usage) == -1) {
+    if (!str_add_f(&buf, "\n\nUsage: %s %s", state->meta->name,
+                   state->meta->usage)) {
       goto fail;
     }
-
-    if (!append_str(&buf, &len, &cap, tmp)) {
-      free(tmp);
-
-      goto fail;
-    }
-
-    free(tmp);
-    tmp = NULL;
   }
 
   // options (flags)
   if (state->flags.count > 0) {
-    if (!append_str(&buf, &len, &cap, "\n\nOptions:\n")) {
+    if (!str_add_f(&buf, "\n\nOptions:\n")) {
       goto fail;
     }
 
     // get the longest flag string length for alignment
     size_t max_flag_len = 0;
     for (size_t i = 0; i < state->flags.count; i++) {
-      const flag_state_t *f = state->flags.list[i];
+      const flag_state_t *fs = state->flags.list[i];
       const size_t short_len =
-          f->meta->short_name ? strlen(f->meta->short_name) : 0;
+          fs->meta->short_name ? strlen(fs->meta->short_name) : 0;
       const size_t long_len =
-          f->meta->long_name ? strlen(f->meta->long_name) : 0;
+          fs->meta->long_name ? strlen(fs->meta->long_name) : 0;
 
       // check for overflow when adding lengths
       if (short_len > SIZE_MAX - long_len) {
@@ -318,269 +404,310 @@ char *app_help_text(const cli_app_state_t *state) {
 
     // append each flag
     for (size_t i = 0; i < state->flags.count; i++) {
-      const flag_state_t *f = state->flags.list[i];
-      char *flag_tmp = NULL;
+      const flag_state_t *fs = state->flags.list[i];
 
-      if (f->meta->short_name && f->meta->long_name) {
-        if (asprintf(&flag_tmp, "  -%s, --%s", f->meta->short_name,
-                     f->meta->long_name) == -1) {
-          goto fail;
-        }
-      } else if (f->meta->short_name) {
-        if (asprintf(&flag_tmp, "  -%s", f->meta->short_name) == -1) {
-          goto fail;
-        }
-      } else if (f->meta->long_name) {
-        if (asprintf(&flag_tmp, "      --%s", f->meta->long_name) == -1) {
-          goto fail;
-        }
+      size_t padding = 0;
+
+      if (fs->meta->short_name && fs->meta->long_name) {
+        padding = str_add_f(&buf, "  -%s, --%s", fs->meta->short_name,
+                            fs->meta->long_name);
+      } else if (fs->meta->short_name) {
+        padding = str_add_f(&buf, "  -%s", fs->meta->short_name);
+      } else if (fs->meta->long_name) {
+        padding = str_add_f(&buf, "      --%s", fs->meta->long_name);
       } else {
         // skip flags with no names (should not happen due to app_add_flag
         // validation)
         continue;
       }
 
-      // at this point flag_tmp is guaranteed to be valid and non-NULL
-      if (!append_str(&buf, &len, &cap, flag_tmp)) {
-        free(flag_tmp);
-
+      if (!padding) {
         goto fail;
       }
 
       // pad to align descriptions
-      const size_t flag_len = strlen(flag_tmp);
-
-      if (flag_len < max_with_pad) {
-        const size_t spaces_needed = (max_with_pad - flag_len);
+      if (padding < max_with_pad) {
+        const size_t spaces_needed = max_with_pad - padding;
 
         // check for overflow in spaces allocation
         if (spaces_needed > SIZE_MAX - 1) {
-          free(flag_tmp);
-
           goto fail;
         }
 
         char *spaces = malloc(spaces_needed + 1);
         if (!spaces) {
-          free(flag_tmp);
-
           goto fail;
         }
 
         memset(spaces, ' ', spaces_needed);
         spaces[spaces_needed] = '\0';
 
-        if (!append_str(&buf, &len, &cap, spaces)) {
-          free(spaces);
-          free(flag_tmp);
-
-          goto fail;
-        }
+        const size_t written = str_add_f(&buf, "%s", spaces);
 
         free(spaces);
+
+        if (!written) {
+          goto fail;
+        }
       }
 
       // append description
-      if (f->meta->description) {
-        if (!append_str(&buf, &len, &cap, f->meta->description)) {
-          free(flag_tmp);
-
+      if (fs->meta->description) {
+        if (!str_add_f(&buf, "%s", fs->meta->description)) {
           goto fail;
         }
       }
 
       // append default value based on type
-      char *default_str = NULL;
-      switch (f->meta->type) {
+      switch (fs->meta->type) {
       case FLAG_TYPE_BOOL:
         // booleans typically don't show default in CLI help
         break;
 
       case FLAG_TYPE_STRING:
-        if (f->meta->default_value.string_value) {
-          if (asprintf(&default_str, " (default: \"%s\")",
-                       f->meta->default_value.string_value) == -1) {
-            free(flag_tmp);
-
+        if (fs->meta->default_value.string_value) {
+          if (!str_add_f(&buf, " (default: \"%s\")",
+                         fs->meta->default_value.string_value)) {
             goto fail;
           }
-
-          if (!append_str(&buf, &len, &cap, default_str)) {
-            free(default_str);
-            free(flag_tmp);
-
-            goto fail;
-          }
-
-          free(default_str);
-          default_str = NULL;
         }
 
         break;
 
       case FLAG_TYPE_STRINGS:
-        if (f->meta->default_value.strings_value.count > 0) {
+        if (fs->meta->default_value.strings_value.count > 0) {
           // start building the strings list representation
-          if (!append_str(&buf, &len, &cap, " (default: [")) {
-            free(flag_tmp);
-
+          if (!str_add_f(&buf, " (default: [")) {
             goto fail;
           }
 
-          for (size_t j = 0; j < f->meta->default_value.strings_value.count;
-               j++) {
-            const char *str_val = f->meta->default_value.strings_value.list[j];
-
-            // format: "value", or "value" for last item
-            const bool is_last =
-                (j + 1 >= f->meta->default_value.strings_value.count);
-
-            if (asprintf(&default_str, "\"%s\"%s", str_val,
-                         is_last ? "" : ", ") == -1) {
-              free(flag_tmp);
-
+          const size_t count = fs->meta->default_value.strings_value.count;
+          for (size_t j = 0; j < count; j++) {
+            if (!str_add_f(&buf, "%s\"%s\"%s", j == 0 ? "" : ", ",
+                           fs->meta->default_value.strings_value.list[j],
+                           j + 1 < count ? "" : "])")) {
               goto fail;
             }
-
-            if (!append_str(&buf, &len, &cap, default_str)) {
-              free(default_str);
-              free(flag_tmp);
-
-              goto fail;
-            }
-
-            free(default_str);
-            default_str = NULL;
-          }
-
-          if (!append_str(&buf, &len, &cap, "])")) {
-            free(flag_tmp);
-
-            goto fail;
           }
         }
 
-        break;
-
-      default:
         break;
       }
 
       // append environment variable if present
-      if (f->meta->env_variable) {
-        char *env_str = NULL;
-        if (asprintf(&env_str, " [$%s]", f->meta->env_variable) == -1) {
-          free(flag_tmp);
-
+      if (fs->meta->env_variable) {
+        if (!str_add_f(&buf, " [$%s]", fs->meta->env_variable)) {
           goto fail;
         }
-
-        if (!append_str(&buf, &len, &cap, env_str)) {
-          free(env_str);
-          free(flag_tmp);
-
-          goto fail;
-        }
-
-        free(env_str);
       }
 
       // append "\n" only if this is not the last flag
       if (i + 1 < state->flags.count) {
-        if (!append_str(&buf, &len, &cap, "\n")) {
-          free(flag_tmp);
-
+        if (!str_add_f(&buf, "\n")) {
           goto fail;
         }
       }
-
-      free(flag_tmp);
-      flag_tmp = NULL; // prevent use-after-free in next iteration
     }
   }
 
   // examples
   if (state->meta->examples) {
-    if (asprintf(&tmp, "\n\nExamples:\n%s", state->meta->examples) == -1) {
+    if (!str_add_f(&buf, "\n\nExamples:\n%s", state->meta->examples)) {
       goto fail;
     }
-
-    if (!append_str(&buf, &len, &cap, tmp)) {
-      free(tmp);
-
-      goto fail;
-    }
-
-    free(tmp);
-    tmp = NULL;
   }
 
   return buf; // caller must free()
 
 fail:
   free(buf);
-  free(tmp); // safe to free NULL
 
   return NULL;
 }
 
-// Helper: Free a list of dynamically allocated strings.
-static void free_string_list(char **list, const size_t count) {
-  if (!list) {
-    return;
-  }
-
-  for (size_t i = 0; i < count; i++) {
-    free(list[i]); // safe to call on NULL per C standard
-  }
-
-  free(list);
-}
-
-// Helper: Append a string to a dynamic buffer, resizing as needed.
-static bool append_str(char **buffer, size_t *len, size_t *cap, const char *s) {
-  // validate all pointer parameters
-  if (!buffer || !len || !cap) {
+/**
+ * Validate environment variable name according to common POSIX rules.
+ */
+static bool validate_env_name(const char *name) {
+  if (!name || !*name || *name == '\0') {
     return false;
   }
 
-  if (!s) {
-    return true; // nothing to append, but not an error
+  // first character must be a letter or underscore
+  if (!isalpha(name[0]) && name[0] != '_') {
+    return false;
   }
 
-  const size_t sLen = strlen(s);
-
-  // check for potential overflow before performing addition
-  if (sLen > SIZE_MAX - *len - 1) {
-    return false; // overflow would occur
-  }
-
-  if (*len + sLen + 1 > *cap) {
-    size_t new_cap = (*cap == 0) ? 128 : *cap;
-
-    // ensure we don't overflow when doubling capacity
-    while (new_cap < *len + sLen + 1) {
-      if (new_cap > SIZE_MAX / 2) {
-        return false; // cannot double without overflow
-      }
-
-      new_cap *= 2;
+  // subsequent characters can be letters, digits, or underscores
+  for (size_t i = 1; name[i] != '\0'; i++) {
+    if (i >= 255) {
+      return false; // exceed max length
     }
 
-    // on failure, realloc leaves original buffer unchanged - this is correct
-    char *new_buf = realloc(*buffer, new_cap);
-    if (!new_buf) {
+    if (!isalnum(name[i]) && name[i] != '_') {
       return false;
     }
-
-    *buffer = new_buf;
-    *cap = new_cap;
   }
-
-  memcpy(*buffer + *len, s, sLen);
-
-  *len += sLen;
-  (*buffer)[*len] = '\0';
 
   return true;
 }
+
+/**
+ * Validate string value for CRLF characters.
+ */
+static bool validate_no_crlf(const char *value) {
+  if (!value) {
+    return false;
+  }
+
+  for (size_t i = 0; value[i] != '\0'; i++) {
+    if (value[i] == '\r' || value[i] == '\n') {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Set flag value from environment variable if set.
+ */
+static bool set_flag_value_from_env(flag_state_t *fs) {
+  if (!fs || !fs->meta || !fs->meta->env_variable) {
+    return false;
+  }
+
+  // validate environment variable name
+  if (!validate_env_name(fs->meta->env_variable)) {
+    return false;
+  }
+
+  const char *env_value = getenv(fs->meta->env_variable);
+  if (!env_value) {
+    return false; // env variable not set
+  }
+
+  // validate value for CRLF
+  if (!validate_no_crlf(env_value)) {
+    return false;
+  }
+
+  switch (fs->meta->type) {
+  case FLAG_TYPE_BOOL:
+    if (strcmp(env_value, "1") == 0 || strcasecmp(env_value, "true") == 0 ||
+        strcasecmp(env_value, "yes") == 0) {
+      set_flag_value_bool(fs, true);
+
+      return true;
+    }
+
+    break;
+
+  case FLAG_TYPE_STRING:
+    if (validate_no_crlf(env_value)) {
+      return set_flag_value_string(fs, env_value);
+    }
+
+    break;
+
+  default:
+    return false;
+  }
+
+  return false;
+}
+
+// FlagsParsingError app_parse_args(cli_app_state_t *state, char *argv[],
+//                                  const int argc) {
+//   if (!state || !argv || argc < 1) {
+//     return FLAGS_PARSING_ERROR_INVALID_ARGUMENTS;
+//   }
+//
+//   if (state->flags.count == 0) {
+//     return FLAGS_PARSING_OK; // nothing to parse
+//   }
+//
+//   // calculate the longest flag length for buffer allocation
+//   size_t longest_flag_len = 0;
+//   for (size_t i = 0; i < state->flags.count; i++) {
+//     const flag_meta_t *m = state->flags.list[i]->meta;
+//     if (!m) {
+//       continue;
+//     }
+//
+//     const size_t long_len = m->long_name ? strlen(m->long_name) + 2 : 0;
+//     const size_t short_len = m->short_name ? strlen(m->short_name) + 1 : 0;
+//
+//     if (long_len > longest_flag_len) {
+//       longest_flag_len = long_len;
+//     }
+//
+//     if (short_len > longest_flag_len) {
+//       longest_flag_len = short_len;
+//     }
+//   }
+//
+//   if (longest_flag_len == 0 || longest_flag_len >= SIZE_MAX - 3) {
+//     return FLAGS_PARSING_ERROR_INVALID_ARGUMENTS; // overflow or no flags
+//   }
+//
+//   // buffer to hold flag strings for comparison
+//   char buf[longest_flag_len + 1]; // +1 for null terminator
+//
+//   bool positional_only = false; // set to true after "--"
+//
+//   for (int i = 1; i < argc; i++) {
+//     const char *arg = argv[i];
+//
+//     // check for "--" separator
+//     if (!positional_only && strcmp(arg, "--") == 0) {
+//       positional_only = true;
+//
+//       continue;
+//     }
+//
+//     if (strlen(arg) < 2 || arg[0] != '-') {
+//       continue; // not a flag
+//     }
+//
+//     char *value = NULL;
+//
+//     for (size_t j = 0; j < state->flags.count; j++) {
+//       const flag_state_t *f = state->flags.list[j];
+//       const flag_meta_t *m = f->meta;
+//       if (!m) {
+//         continue;
+//       }
+//
+//       // check for short flag match
+//       if (m->short_name) {
+//         snprintf(buf, sizeof(buf), "-%s", m->short_name);
+//         if (strcmp(arg, buf) == 0) {
+//           // matched short flag
+//           if (i + 1 >= argc) {
+//             return FLAGS_PARSING_ERROR_MISSING_VALUE;
+//           }
+//
+//           // note: increment i to consume the value and skip the next
+//           argument
+//           // from being parsed as a flag
+//           value = argv[++i];
+//         }
+//       } else if (m->long_name) {
+//         // check for long flag match
+//         snprintf(buf, sizeof(buf), "--%s", m->long_name);
+//         if (strcmp(arg, buf) == 0) {
+//           // matched long flag
+//           if (i + 1 >= argc) {
+//             return FLAGS_PARSING_ERROR_MISSING_VALUE;
+//           }
+//
+//           // note: increment i to consume the value and skip the next
+//           argument
+//           // from being parsed as a flag
+//           value = argv[++i];
+//         }
+//       }
+//     }
+//   }
+// }
