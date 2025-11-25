@@ -207,11 +207,11 @@ static flag_state_t *new_flag_state(const flag_meta_t *fm) {
     // set default value if provided
     if (fm->default_value.bool_value) {
       set_flag_value_bool(fs, fm->default_value.bool_value);
-
-      fs->value_source = FLAG_VALUE_SOURCE_DEFAULT;
     } else {
       set_flag_value_bool(fs, false); // default to false
     }
+
+    fs->value_source = FLAG_VALUE_SOURCE_DEFAULT;
 
     break;
 
@@ -738,62 +738,60 @@ static bool app_copy_all_args(cli_app_state_t *as, const char *argv[],
   return true;
 }
 
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((format(printf, 2, 3)))
-#endif
-static parsing_result_t
-new_parsing_result(const FlagsParsingErrorCode code, const char *fmt, ...) {
-  parsing_result_t res;
-  res.code = code;
-  res.message = NULL;
-
-  if (fmt) {
-    va_list args;
-    va_start(args, fmt);
-
-    va_list args_copy;
-    va_copy(args_copy, args);
-    const int len = vsnprintf(NULL, 0, fmt, args_copy);
-    va_end(args_copy);
-
-    if (len > 0) {
-      res.message = malloc((size_t)len + 1);
-      if (res.message) {
-        vsnprintf(res.message, (size_t)len + 1, fmt, args);
-      }
-    }
-
-    va_end(args);
-  }
-
-  return res;
-}
-
 /**
  * Free resources inside a parsing_result_t.
  */
-void free_parsing_result(parsing_result_t result) {
-  if (result.message) {
-    free(result.message);
-    result.message = NULL;
+void free_parsing_result(parsing_result_t *res) {
+  if (!res) {
+    return;
   }
 
-  result.code = 0;
+  if (res->message) {
+    free(res->message);
+    res->message = NULL;
+  }
+
+  free(res);
 }
 
-parsing_result_t app_parse_args(cli_app_state_t *as, const char *argv[],
-                                const int argc) {
+/**
+ * Parse command-line arguments into the application state.
+ *
+ * Reads environment variables for flags, then processes argv/argc:
+ * - recognizes boolean, string, and multi-string flags (short and long names),
+ * - sets flag values (CLI overrides env/defaults),
+ * - collects positional arguments into state->args.
+ *
+ * Returns a malloc'd parsing_result_t (caller must free) with a status code
+ * and optional message describing errors. On allocation failure, returns NULL.
+ */
+parsing_result_t *app_parse_args(cli_app_state_t *as, const char *argv[],
+                                 const int argc) {
+  parsing_result_t *res = malloc(sizeof(parsing_result_t));
+  if (!res) {
+    return NULL; // allocation failure
+  }
+
+  res->message = NULL;
+
   if (!as || !argv || argc < 0) {
-    return new_parsing_result(FLAGS_PARSING_ERROR_INVALID_ARGUMENTS,
-                              "invalid arguments to app_parse_args");
+    res->code = FLAGS_PARSING_INVALID_ARGUMENTS;
+    res->message = strdup("invalid arguments to app_parse_args");
+
+    return res;
   }
 
   // if we have no flags defined, just copy all argv entries as-is to args
   if (as->flags.count == 0) {
-    return app_copy_all_args(as, argv, argc)
-               ? new_parsing_result(FLAGS_PARSING_OK, NULL)
-               : new_parsing_result(FLAGS_PARSING_INTERNAL_ERROR,
-                                    "failed to copy arguments");
+    if (app_copy_all_args(as, argv, argc)) {
+      res->code = FLAGS_PARSING_OK;
+
+      return res;
+    }
+
+    free(res);
+
+    return NULL; // copying args allocation failed
   }
 
   // first, set flag values from environment variables
@@ -804,39 +802,44 @@ parsing_result_t app_parse_args(cli_app_state_t *as, const char *argv[],
   const size_t flag_buf_size = app_get_longest_flag_name(as) + 1;
   char *flag_buf = malloc(flag_buf_size);
   if (!flag_buf) {
-    return new_parsing_result(FLAGS_PARSING_INTERNAL_ERROR,
-                              "failed to allocate temporary buffer");
+    free(res);
+
+    return NULL; // failed to allocate temporary buffer
   }
 
   // next, parse command-line arguments
   for (int i = 0; i < argc; i++) {
-    printf("================ %d =================\n", i);
-
     const char *arg = argv[i];
-
-    printf("=== Parsing arg: %s\n", arg);
-
     if (arg == NULL) {
       continue; // skip NULL arguments
     }
 
     // if arg starts with '-', it's a flag
     if (arg[0] == '-') {
-      printf("=== Flag detected: %s\n", arg);
-
       // find the flag
       flag_state_t *fs = app_find_flag(as, flag_buf, flag_buf_size, arg);
       if (!fs) {
         free(flag_buf);
 
-        return new_parsing_result(FLAGS_PARSING_UNKNOWN_FLAG, "unknown flag");
+        res->code = FLAGS_PARSING_UNKNOWN_FLAG;
+        str_add_f(&res->message, "unknown flag: %s", arg);
+
+        return res;
       }
 
       switch (fs->meta->type) {
       case FLAG_TYPE_BOOL:
-        set_flag_value_bool(fs, true); // presence sets to true
+        if (fs->value_source == FLAG_VALUE_SOURCE_CLI) {
+          free(flag_buf);
 
-        printf("=== Set value TRUE to %s\n", arg);
+          res->code = FLAGS_PARSING_DUPLICATE_FLAG;
+          str_add_f(&res->message, "duplicate flag: %s", arg);
+
+          return res;
+        }
+
+        set_flag_value_bool(fs, true); // presence sets to true
+        fs->value_source = FLAG_VALUE_SOURCE_CLI;
 
         continue;
 
@@ -844,28 +847,39 @@ parsing_result_t app_parse_args(cli_app_state_t *as, const char *argv[],
         if (i + 1 >= argc) {
           free(flag_buf);
 
-          return new_parsing_result(FLAGS_PARSING_ERROR_MISSING_VALUE,
-                                    "missing value for flag %s", arg);
+          res->code = FLAGS_PARSING_MISSING_VALUE;
+          str_add_f(&res->message, "missing value for flag %s", arg);
+
+          return res;
+        }
+
+        if (fs->value_source == FLAG_VALUE_SOURCE_CLI) {
+          free(flag_buf);
+
+          res->code = FLAGS_PARSING_DUPLICATE_FLAG;
+          str_add_f(&res->message, "duplicate flag: %s", arg);
+
+          return res;
         }
 
         if (!validate_no_crlf(argv[i + 1])) {
           free(flag_buf);
 
-          return new_parsing_result(FLAGS_PARSING_INTERNAL_ERROR,
-                                    "invalid characters in value for flag %s",
-                                    arg);
+          res->code = FLAGS_PARSING_INVALID_VALUE;
+          str_add_f(&res->message, "invalid characters in value for flag %s",
+                    arg);
+
+          return res;
         }
 
         if (!set_flag_value_string(fs, argv[i + 1])) {
           free(flag_buf);
+          free(res);
 
-          return new_parsing_result(
-              FLAGS_PARSING_INTERNAL_ERROR,
-              "allocation failure setting value for flag %s", arg);
+          return NULL; // allocation failure setting value for flag
         }
 
-        printf("=== Set value \"%s\" to %s\n", argv[i + 1], arg);
-
+        fs->value_source = FLAG_VALUE_SOURCE_CLI;
         i++; // consume next arg
 
         continue;
@@ -874,8 +888,10 @@ parsing_result_t app_parse_args(cli_app_state_t *as, const char *argv[],
         if (i + 1 >= argc) {
           free(flag_buf);
 
-          return new_parsing_result(FLAGS_PARSING_ERROR_MISSING_VALUE,
-                                    "missing value for flag %s", arg);
+          res->code = FLAGS_PARSING_MISSING_VALUE;
+          str_add_f(&res->message, "missing value for flag %s", arg);
+
+          return res;
         }
 
         // in case if the flag was previously set by env var or default,
@@ -889,20 +905,19 @@ parsing_result_t app_parse_args(cli_app_state_t *as, const char *argv[],
         if (!validate_no_crlf(argv[i + 1])) {
           free(flag_buf);
 
-          return new_parsing_result(FLAGS_PARSING_INTERNAL_ERROR,
-                                    "invalid characters in value for flag %s",
-                                    arg);
+          res->code = FLAGS_PARSING_INVALID_VALUE;
+          str_add_f(&res->message, "invalid characters in value for flag %s",
+                    arg);
+
+          return res;
         }
 
         if (!add_flag_value_strings(fs, argv[i + 1])) {
           free(flag_buf);
+          free(res);
 
-          return new_parsing_result(
-              FLAGS_PARSING_INTERNAL_ERROR,
-              "allocation failure adding value for flag %s", arg);
+          return NULL; // allocation failure adding value for flag
         }
-
-        printf("=== Set value \"%s\" to %s\n", argv[i + 1], arg);
 
         i++; // consume next arg
 
@@ -911,8 +926,11 @@ parsing_result_t app_parse_args(cli_app_state_t *as, const char *argv[],
       default:
         free(flag_buf);
 
-        return new_parsing_result(FLAGS_PARSING_INTERNAL_ERROR,
-                                  "unknown flag type for flag %s", arg);
+        res->code = FLAGS_PARSING_UNKNOWN_FLAG;
+        str_add_f(&res->message, "internal error: unknown flag type for flag: %s",
+                  arg);
+
+        return res;
       }
     }
 
@@ -921,27 +939,28 @@ parsing_result_t app_parse_args(cli_app_state_t *as, const char *argv[],
     char **new_list =
         realloc(as->args.list, sizeof(char *) * (as->args.count + 1));
     if (!new_list) {
+      free(res);
       free(flag_buf);
 
-      return new_parsing_result(FLAGS_PARSING_INTERNAL_ERROR,
-                                "allocation failure adding positional "
-                                "argument");
+      return NULL; // allocation failure adding positional argument
     }
+
     as->args.list = new_list;
 
     as->args.list[as->args.count] = strdup(arg);
     if (!as->args.list[as->args.count]) {
+      free(res);
       free(flag_buf);
 
-      return new_parsing_result(FLAGS_PARSING_INTERNAL_ERROR,
-                                "allocation failure adding positional "
-                                "argument");
+      return NULL; // allocation failure duplicating positional argument
     }
 
     as->args.count++;
   }
 
+  res->code = FLAGS_PARSING_OK;
+
   free(flag_buf);
 
-  return new_parsing_result(FLAGS_PARSING_OK, NULL);
+  return res;
 }

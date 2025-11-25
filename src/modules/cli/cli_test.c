@@ -92,12 +92,12 @@ void test_app_add_flag() {
 
   assert(bool_flag->value.bool_value == false);
 
-  assert_string_equal(string_flag->value.string_value, "default");
+  assert_string_equal("default", string_flag->value.string_value);
 
   assert(strings_flag->value.strings_value.count == 3);
-  assert_string_equal(strings_flag->value.strings_value.list[0], "one");
-  assert_string_equal(strings_flag->value.strings_value.list[1], "two");
-  assert_string_equal(strings_flag->value.strings_value.list[2], "three");
+  assert_string_equal("one", strings_flag->value.strings_value.list[0]);
+  assert_string_equal("two", strings_flag->value.strings_value.list[1]);
+  assert_string_equal("three", strings_flag->value.strings_value.list[2]);
 
   free_cli_app(app);
 }
@@ -214,34 +214,279 @@ void test_app_parse_args_common() {
   const flag_state_t *string_flag = app_add_flag(app, &EXAMPLE_STRING_FLAG);
   const flag_state_t *strings_flag = app_add_flag(app, &EXAMPLE_STRINGS_FLAG);
 
-  const char *argv[] = {
-    "--bool-flag",
-    "-s", "custom_value",
-    "--strings-flag", "first",
-    "-m", "second",
-    "positional1",
-    "positional2"
-  };
+  const char *argv[] = {"--bool-flag",    "-s",          "custom_value",
+                        "--strings-flag", "first",       "-m",
+                        "second",         "positional1", "positional2"};
 
-  const parsing_result_t result = app_parse_args(app, argv, sizeof(argv) / sizeof(argv[0]));
+  parsing_result_t *res =
+      app_parse_args(app, argv, sizeof(argv) / sizeof(argv[0]));
 
-  assert(result.code == FLAGS_PARSING_OK);
+  assert(res->code == FLAGS_PARSING_OK);
+  assert(res->message == NULL);
 
-  free_parsing_result(result);
+  free_parsing_result(res);
 
   assert(bool_flag->value.bool_value == true);
-  assert_string_equal(string_flag->value.string_value, "custom_value");
+  assert(bool_flag->value_source == FLAG_VALUE_SOURCE_CLI);
 
-  printf("%d\n", (int) strings_flag->value.strings_value.count);
+  assert_string_equal("custom_value", string_flag->value.string_value);
+  assert(string_flag->value_source == FLAG_VALUE_SOURCE_CLI);
+
   assert(strings_flag->value.strings_value.count == 2);
-  assert_string_equal(strings_flag->value.strings_value.list[0], "first");
-  assert_string_equal(strings_flag->value.strings_value.list[1], "second");
+  assert_string_equal("first", strings_flag->value.strings_value.list[0]);
+  assert_string_equal("second", strings_flag->value.strings_value.list[1]);
+  assert(strings_flag->value_source == FLAG_VALUE_SOURCE_CLI);
 
   assert(app->args.count == 2);
-  assert_string_equal(app->args.list[0], "positional1");
-  assert_string_equal(app->args.list[1], "positional2");
+  assert_string_equal("positional1", app->args.list[0]);
+  assert_string_equal("positional2", app->args.list[1]);
 
   free_cli_app(app);
+}
+
+void test_app_parse_args_defaults() {
+  cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
+
+  const flag_state_t *bool_flag = app_add_flag(app, &EXAMPLE_BOOL_FLAG);
+  const flag_state_t *string_flag = app_add_flag(app, &EXAMPLE_STRING_FLAG);
+  const flag_state_t *strings_flag = app_add_flag(app, &EXAMPLE_STRINGS_FLAG);
+
+  const char *argv[] = {"foo"};
+
+  parsing_result_t *res =
+      app_parse_args(app, argv, sizeof(argv) / sizeof(argv[0]));
+
+  assert(res->code == FLAGS_PARSING_OK);
+  assert(res->message == NULL);
+
+  free_parsing_result(res);
+
+  assert(bool_flag->value.bool_value == false);
+  assert(bool_flag->value_source == FLAG_VALUE_SOURCE_DEFAULT);
+
+  assert_string_equal("default", string_flag->value.string_value);
+  assert(string_flag->value_source == FLAG_VALUE_SOURCE_DEFAULT);
+
+  assert(strings_flag->value.strings_value.count == 3);
+  assert_string_equal("one", strings_flag->value.strings_value.list[0]);
+  assert_string_equal("two", strings_flag->value.strings_value.list[1]);
+  assert_string_equal("three", strings_flag->value.strings_value.list[2]);
+  assert(strings_flag->value_source == FLAG_VALUE_SOURCE_DEFAULT);
+
+  assert(app->args.count == 1);
+  assert_string_equal(app->args.list[0], "foo");
+
+  free_cli_app(app);
+}
+
+void test_app_parse_args_empty() {
+  cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
+
+  const flag_state_t *bool_flag = app_add_flag(app, &EXAMPLE_BOOL_FLAG);
+  const flag_state_t *string_flag = app_add_flag(app, &EXAMPLE_STRING_FLAG);
+  const flag_state_t *strings_flag = app_add_flag(app, &EXAMPLE_STRINGS_FLAG);
+
+  const char *argv[] = {NULL};
+
+  parsing_result_t *res = app_parse_args(app, argv, 0);
+
+  assert(res->code == FLAGS_PARSING_OK);
+  assert(res->message == NULL);
+
+  free_parsing_result(res);
+
+  assert(bool_flag->value.bool_value == false);
+  assert(bool_flag->value_source == FLAG_VALUE_SOURCE_DEFAULT);
+
+  assert_string_equal("default", string_flag->value.string_value);
+  assert(string_flag->value_source == FLAG_VALUE_SOURCE_DEFAULT);
+
+  assert(strings_flag->value.strings_value.count == 3);
+  assert_string_equal("one", strings_flag->value.strings_value.list[0]);
+  assert_string_equal("two", strings_flag->value.strings_value.list[1]);
+  assert_string_equal("three", strings_flag->value.strings_value.list[2]);
+  assert(strings_flag->value_source == FLAG_VALUE_SOURCE_DEFAULT);
+
+  assert(app->args.count == 0);
+  assert(app->args.list == NULL);
+
+  free_cli_app(app);
+}
+
+void test_app_parse_args_env_vars() {
+  cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
+
+  const flag_state_t *bool_flag = app_add_flag(app, &EXAMPLE_BOOL_FLAG);
+  const flag_state_t *string_flag = app_add_flag(app, &EXAMPLE_STRING_FLAG);
+  const flag_state_t *strings_flag = app_add_flag(app, &EXAMPLE_STRINGS_FLAG);
+
+  // set environment values
+  setenv(EXAMPLE_BOOL_FLAG.env_variable, "true", 1);
+  setenv(EXAMPLE_STRING_FLAG.env_variable, "env_value", 1);
+  setenv(EXAMPLE_STRINGS_FLAG.env_variable, "env1,env2", 1);
+
+  const char *argv[] = {NULL};
+
+  parsing_result_t *res = app_parse_args(app, argv, 0);
+
+  assert(res->code == FLAGS_PARSING_OK);
+  assert(res->message == NULL);
+
+  free_parsing_result(res);
+
+  assert(bool_flag->value.bool_value == true);
+  assert(bool_flag->value_source == FLAG_VALUE_SOURCE_ENV);
+
+  assert_string_equal("env_value", string_flag->value.string_value);
+  assert(string_flag->value_source == FLAG_VALUE_SOURCE_ENV);
+
+  assert(strings_flag->value.strings_value.count == 3);
+  assert_string_equal("one", strings_flag->value.strings_value.list[0]);
+  assert_string_equal("two", strings_flag->value.strings_value.list[1]);
+  assert_string_equal("three", strings_flag->value.strings_value.list[2]);
+  assert(strings_flag->value_source == FLAG_VALUE_SOURCE_DEFAULT);
+
+  // unset environment variables after parsing
+  unsetenv(EXAMPLE_BOOL_FLAG.env_variable);
+  unsetenv(EXAMPLE_STRING_FLAG.env_variable);
+  unsetenv(EXAMPLE_STRINGS_FLAG.env_variable);
+
+  free_cli_app(app);
+}
+
+void test_app_parse_args_errors() {
+  { // negative argc
+    cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
+
+    const char *argv[] = {"foo", "bar"};
+
+    parsing_result_t *res = app_parse_args(app, argv, -1);
+
+    assert(res->code == FLAGS_PARSING_INVALID_ARGUMENTS);
+    assert_string_equal("invalid arguments to app_parse_args", res->message);
+
+    free_parsing_result(res);
+    free_cli_app(app);
+  }
+
+  { // NULL argv
+    cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
+
+    parsing_result_t *res = app_parse_args(app, NULL, 999);
+
+    assert(res->code == FLAGS_PARSING_INVALID_ARGUMENTS);
+    assert_string_equal("invalid arguments to app_parse_args", res->message);
+
+    free_parsing_result(res);
+    free_cli_app(app);
+  }
+
+  { // unknown flag
+    cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
+
+    app_add_flag(app, &EXAMPLE_BOOL_FLAG);
+
+    parsing_result_t *res =
+        app_parse_args(app, (const char *[]){"-b", "--unknown-flag"}, 2);
+
+    assert(res->code == FLAGS_PARSING_UNKNOWN_FLAG);
+    assert_string_equal("unknown flag: --unknown-flag", res->message);
+
+    free_parsing_result(res);
+    free_cli_app(app);
+  }
+
+  { // duplicate boolflag
+    cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
+
+    app_add_flag(app, &EXAMPLE_BOOL_FLAG);
+
+    parsing_result_t *res =
+        app_parse_args(app, (const char *[]){"-b", "--bool-flag"}, 2);
+
+    assert(res->code == FLAGS_PARSING_DUPLICATE_FLAG);
+    assert_string_equal("duplicate flag: --bool-flag", res->message);
+
+    free_parsing_result(res);
+    free_cli_app(app);
+  }
+
+  { // duplicate string flag
+    cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
+
+    app_add_flag(app, &EXAMPLE_STRING_FLAG);
+
+    parsing_result_t *res = app_parse_args(
+        app, (const char *[]){"--string-flag", "value1", "-s", "value2"}, 4);
+
+    assert(res->code == FLAGS_PARSING_DUPLICATE_FLAG);
+    assert_string_equal("duplicate flag: -s", res->message);
+
+    free_parsing_result(res);
+    free_cli_app(app);
+  }
+
+  { // string flag without value
+    cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
+
+    app_add_flag(app, &EXAMPLE_STRING_FLAG);
+
+    parsing_result_t *res =
+        app_parse_args(app, (const char *[]){"--string-flag"}, 1);
+
+    assert(res->code == FLAGS_PARSING_MISSING_VALUE);
+    assert_string_equal("missing value for flag --string-flag", res->message);
+
+    free_parsing_result(res);
+    free_cli_app(app);
+  }
+
+  { // string flag with CRLF
+    cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
+
+    app_add_flag(app, &EXAMPLE_STRING_FLAG);
+
+    parsing_result_t *res = app_parse_args(
+        app, (const char *[]){"--string-flag", "invalid\r\nvalue"}, 2);
+
+    assert(res->code == FLAGS_PARSING_INVALID_VALUE);
+    assert_string_equal("invalid characters in value for flag --string-flag",
+                        res->message);
+
+    free_parsing_result(res);
+    free_cli_app(app);
+  }
+
+  { // missing value for strings flag
+    cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
+
+    app_add_flag(app, &EXAMPLE_STRINGS_FLAG);
+
+    parsing_result_t *res =
+        app_parse_args(app, (const char *[]){"--strings-flag"}, 1);
+
+    assert(res->code == FLAGS_PARSING_MISSING_VALUE);
+    assert_string_equal("missing value for flag --strings-flag", res->message);
+
+    free_parsing_result(res);
+    free_cli_app(app);
+  }
+
+  { // strings flag with CRLF
+    cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
+
+    app_add_flag(app, &EXAMPLE_STRINGS_FLAG);
+
+    parsing_result_t *res = app_parse_args(
+        app, (const char *[]){"--strings-flag", "invalid\r\nvalue"}, 2);
+
+    assert(res->code == FLAGS_PARSING_INVALID_VALUE);
+    assert_string_equal("invalid characters in value for flag --strings-flag",
+                        res->message);
+
+    free_parsing_result(res);
+    free_cli_app(app);
+  }
 }
 
 int main() {
@@ -254,6 +499,10 @@ int main() {
   test_help_with_custom_flags();
 
   test_app_parse_args_common();
+  test_app_parse_args_defaults();
+  test_app_parse_args_empty();
+  test_app_parse_args_env_vars();
+  test_app_parse_args_errors();
 
   return 0;
 }
