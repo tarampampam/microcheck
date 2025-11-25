@@ -81,6 +81,11 @@ void free_cli_app(cli_app_state_t *as) {
   }
 
   free(as->flags.list);
+
+  for (size_t i = 0; i < as->args.count; i++) {
+    free(as->args.list[i]);
+  }
+
   free(as->args.list);
   free(as);
 }
@@ -100,7 +105,7 @@ static void set_flag_value_bool(flag_state_t *fs, const bool value) {
  * Set the value of a string flag.
  */
 static bool set_flag_value_string(flag_state_t *fs, const char *value) {
-  if (fs->meta->type != FLAG_TYPE_STRING) {
+  if (!value || fs->meta->type != FLAG_TYPE_STRING) {
     return false;
   }
 
@@ -137,6 +142,10 @@ static void clear_flag_strings(flag_state_t *fs) {
 static bool add_flag_value_strings(flag_state_t *fs, const char *value) {
   if (!value) {
     return false;
+  }
+
+  if (fs->value.strings_value.count >= SIZE_MAX / sizeof(char *) - 1) {
+    return false; // overflow would occur
   }
 
   const size_t new_size = sizeof(char *) * (fs->value.strings_value.count + 1);
@@ -181,6 +190,8 @@ static bool set_flag_value_strings(flag_state_t *fs, const char **values,
     }
 
     if (!add_flag_value_strings(fs, values[i])) {
+      clear_flag_strings(fs);
+
       return false;
     }
   }
@@ -211,6 +222,8 @@ static flag_state_t *new_flag_state(const flag_meta_t *fm) {
 
   // initialize union to safe state before setting actual value
   memset(&fs->value, 0, sizeof(fs->value));
+
+  fs->value_source = FLAG_VALUE_SOURCE_NONE;
 
   switch (fm->type) {
   case FLAG_TYPE_BOOL:
@@ -262,7 +275,7 @@ static flag_state_t *new_flag_state(const flag_meta_t *fm) {
 
   default:
     // unknown flag type - fail safely
-    free(fs);
+    free_flag_state(fs);
 
     return NULL;
   }
@@ -284,6 +297,12 @@ flag_state_t *app_add_flag(cli_app_state_t *as, const flag_meta_t *fm) {
 
   flag_state_t *fs = new_flag_state(fm);
   if (!fs) {
+    return NULL;
+  }
+
+  if (as->flags.count >= SIZE_MAX / sizeof(flag_state_t *) - 1) {
+    free_flag_state(fs);
+
     return NULL;
   }
 
@@ -315,6 +334,10 @@ __attribute__((format(printf, 2, 3)))
 #endif
 size_t
 str_add_f(char **dest, const char *fmt, ...) {
+  if (!dest || !fmt) {
+    return 0;
+  }
+
   va_list args, args_copy;
 
   // calculate required size for formatted string
@@ -333,6 +356,13 @@ str_add_f(char **dest, const char *fmt, ...) {
 
   // get current length
   const size_t curr_len = *dest ? strlen(*dest) : 0;
+
+  if (curr_len > SIZE_MAX - add_len_u - 1) {
+    va_end(args_copy);
+
+    return 0;
+  }
+
   const size_t new_len = curr_len + add_len_u + 1; // +1 for null terminator
 
   // reallocate buffer
@@ -550,7 +580,7 @@ static bool validate_env_name(const char *name) {
   }
 
   // first character must be a letter or underscore
-  if (!isalpha(name[0]) && name[0] != '_') {
+  if (!isalpha((unsigned char)name[0]) && name[0] != '_') {
     return false;
   }
 
@@ -560,7 +590,7 @@ static bool validate_env_name(const char *name) {
       return false; // exceed max length
     }
 
-    if (!isalnum(name[i]) && name[i] != '_') {
+    if (!isalnum((unsigned char)name[i]) && name[i] != '_') {
       return false;
     }
   }
@@ -621,12 +651,10 @@ static bool set_flag_value_from_env(flag_state_t *fs) {
     break;
 
   case FLAG_TYPE_STRING:
-    if (validate_no_crlf(env_value)) {
-      if (set_flag_value_string(fs, env_value)) {
-        fs->value_source = FLAG_VALUE_SOURCE_ENV;
+    if (set_flag_value_string(fs, env_value)) {
+      fs->value_source = FLAG_VALUE_SOURCE_ENV;
 
-        return true;
-      }
+      return true;
     }
 
     break;
@@ -674,7 +702,12 @@ static size_t app_get_longest_flag_name(const cli_app_state_t *as) {
  */
 static flag_state_t *app_find_flag(const cli_app_state_t *as, char *buf,
                                    const size_t buf_size, const char *arg) {
-  if (!as || !arg || strlen(arg) < 2) {
+  if (!as || !arg) {
+    return NULL;
+  }
+
+  const size_t arg_len = strlen(arg);
+  if (arg_len < 2) {
     return NULL;
   }
 
@@ -687,17 +720,25 @@ static flag_state_t *app_find_flag(const cli_app_state_t *as, char *buf,
 
     // check for short flag match
     if (fm->short_name) {
-      snprintf(buf, buf_size, "-%s", fm->short_name);
-      if (strcmp(arg, buf) == 0) {
-        return as->flags.list[i];
+      const size_t required_len = strlen(fm->short_name) + 2; // "-" + name + '\0'
+
+      if (required_len <= buf_size) {
+        snprintf(buf, buf_size, "-%s", fm->short_name);
+        if (strcmp(arg, buf) == 0) {
+          return as->flags.list[i];
+        }
       }
     }
 
     // check for long flag match
     if (fm->long_name) {
-      snprintf(buf, buf_size, "--%s", fm->long_name);
-      if (strcmp(arg, buf) == 0) {
-        return as->flags.list[i];
+      const size_t required_len = strlen(fm->long_name) + 3; // "--" + name + '\0'
+
+      if (required_len <= buf_size) {
+        snprintf(buf, buf_size, "--%s", fm->long_name);
+        if (strcmp(arg, buf) == 0) {
+          return as->flags.list[i];
+        }
       }
     }
   }
@@ -721,6 +762,14 @@ static bool app_copy_all_args(cli_app_state_t *as, const char *argv[],
     as->args.count = 0;
   }
 
+  if (argc == 0) {
+    return true;
+  }
+
+  if ((size_t)argc > SIZE_MAX / sizeof(char *)) {
+    return false;
+  }
+
   // copy all argv entries
   as->args.list = malloc(sizeof(char *) * (size_t)argc);
   if (!as->args.list) {
@@ -728,6 +777,19 @@ static bool app_copy_all_args(cli_app_state_t *as, const char *argv[],
   }
 
   for (size_t i = 0; i < (size_t)argc; i++) {
+    if (!argv[i]) {
+      // free previously allocated entries
+      for (size_t j = 0; j < i; j++) {
+        free(as->args.list[j]);
+      }
+
+      free(as->args.list);
+      as->args.list = NULL;
+      as->args.count = 0;
+
+      return false;
+    }
+
     as->args.list[i] = strdup(argv[i]);
     if (!as->args.list[i]) {
       // free previously allocated entries
@@ -787,6 +849,11 @@ parsing_result_t *app_parse_args(cli_app_state_t *as, const char *argv[],
   if (!as || !argv || argc < 0) {
     res->code = FLAGS_PARSING_INVALID_ARGUMENTS;
     res->message = strdup("invalid arguments to app_parse_args");
+    if (!res->message) {
+      free(res);
+
+      return NULL;
+    }
 
     return res;
   }
@@ -810,6 +877,13 @@ parsing_result_t *app_parse_args(cli_app_state_t *as, const char *argv[],
   }
 
   const size_t flag_buf_size = app_get_longest_flag_name(as) + 1;
+
+  if (flag_buf_size == 0 || flag_buf_size > SIZE_MAX) {
+    free(res);
+
+    return NULL;
+  }
+
   char *flag_buf = malloc(flag_buf_size);
   if (!flag_buf) {
     free(res);
@@ -834,6 +908,12 @@ parsing_result_t *app_parse_args(cli_app_state_t *as, const char *argv[],
         res->code = FLAGS_PARSING_UNKNOWN_FLAG;
         str_add_f(&res->message, "unknown flag: %s", arg);
 
+        if (!res->message) {
+          free(res);
+
+          return NULL;
+        }
+
         return res;
       }
 
@@ -844,6 +924,12 @@ parsing_result_t *app_parse_args(cli_app_state_t *as, const char *argv[],
 
           res->code = FLAGS_PARSING_DUPLICATE_FLAG;
           str_add_f(&res->message, "duplicate flag: %s", arg);
+
+          if (!res->message) {
+            free(res);
+
+            return NULL;
+          }
 
           return res;
         }
@@ -860,6 +946,12 @@ parsing_result_t *app_parse_args(cli_app_state_t *as, const char *argv[],
           res->code = FLAGS_PARSING_MISSING_VALUE;
           str_add_f(&res->message, "missing value for flag %s", arg);
 
+          if (!res->message) {
+            free(res);
+
+            return NULL;
+          }
+
           return res;
         }
 
@@ -869,15 +961,27 @@ parsing_result_t *app_parse_args(cli_app_state_t *as, const char *argv[],
           res->code = FLAGS_PARSING_DUPLICATE_FLAG;
           str_add_f(&res->message, "duplicate flag: %s", arg);
 
+          if (!res->message) {
+            free(res);
+
+            return NULL;
+          }
+
           return res;
         }
 
-        if (!validate_no_crlf(argv[i + 1])) {
+        if (!argv[i + 1] || !validate_no_crlf(argv[i + 1])) {
           free(flag_buf);
 
           res->code = FLAGS_PARSING_INVALID_VALUE;
           str_add_f(&res->message, "invalid characters in value for flag %s",
                     arg);
+
+          if (!res->message) {
+            free(res);
+
+            return NULL;
+          }
 
           return res;
         }
@@ -901,6 +1005,12 @@ parsing_result_t *app_parse_args(cli_app_state_t *as, const char *argv[],
           res->code = FLAGS_PARSING_MISSING_VALUE;
           str_add_f(&res->message, "missing value for flag %s", arg);
 
+          if (!res->message) {
+            free(res);
+
+            return NULL;
+          }
+
           return res;
         }
 
@@ -912,12 +1022,18 @@ parsing_result_t *app_parse_args(cli_app_state_t *as, const char *argv[],
           fs->value_source = FLAG_VALUE_SOURCE_CLI;
         }
 
-        if (!validate_no_crlf(argv[i + 1])) {
+        if (!argv[i + 1] || !validate_no_crlf(argv[i + 1])) {
           free(flag_buf);
 
           res->code = FLAGS_PARSING_INVALID_VALUE;
           str_add_f(&res->message, "invalid characters in value for flag %s",
                     arg);
+
+          if (!res->message) {
+            free(res);
+
+            return NULL;
+          }
 
           return res;
         }
@@ -940,11 +1056,24 @@ parsing_result_t *app_parse_args(cli_app_state_t *as, const char *argv[],
         str_add_f(&res->message,
                   "internal error: unknown flag type for flag: %s", arg);
 
+        if (!res->message) {
+          free(res);
+
+          return NULL;
+        }
+
         return res;
       }
     }
 
     // positional argument - copy it to args list
+    if (as->args.count >= SIZE_MAX / sizeof(char *) - 1) {
+      free(res);
+      free(flag_buf);
+
+      return NULL;
+    }
+
     // allocate new list with increased size
     char **new_list =
         realloc(as->args.list, sizeof(char *) * (as->args.count + 1));
