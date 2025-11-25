@@ -120,7 +120,10 @@ void free_cli_app(cli_app_state_t *);
 /**
  * Add a new flag to the CLI application.
  *
- * Returns pointer to the newly created flag state, or NULL on failure.
+ * Returns a pointer to the newly created flag state, or NULL on failure.
+ * The returned pointer is mutable and may be modified by the caller.
+ * In typical usage, flags should not be mutated after parsing; mutation is
+ * intended only for advanced use cases.
  */
 flag_state_t *app_add_flag(cli_app_state_t *, const flag_meta_t *);
 
@@ -142,29 +145,81 @@ typedef enum {
   FLAGS_PARSING_UNKNOWN_FLAG,
   FLAGS_PARSING_INVALID_VALUE,
   FLAGS_PARSING_DUPLICATE_FLAG,
-} FlagsParsingErrorCode;
+} ArgsParsingErrorCode;
 
 /**
  * Result of parsing command-line arguments.
  */
 typedef struct {
-  FlagsParsingErrorCode code;
+  ArgsParsingErrorCode code;
   char *message; // human-readable error message, or NULL on success
-} parsing_result_t;
+} args_parsing_result_t;
 
 /**
  * Free resources inside a parsing_result_t.
  */
-void free_parsing_result(parsing_result_t *);
+void free_args_parsing_result(args_parsing_result_t *);
+
+#ifndef CLI_FLAG_MAX_ENV_NAME_LEN
+#define CLI_FLAG_MAX_ENV_NAME_LEN 255
+#endif
 
 /**
  * Parse command-line arguments into the application state.
  *
  * Returns NULL on allocation failure, or a malloc'd parsing_result_t
- * (caller must free) with a status code and optional message describing
- * errors.
+ * (caller must free_args_parsing_result()) with a status code and optional
+ * message describing errors.
  */
-parsing_result_t *app_parse_args(cli_app_state_t *, const char *argv[],
-                                 int argc);
+args_parsing_result_t *app_parse_args(cli_app_state_t *, const char *argv[],
+                                      int argc);
+
+#ifndef COMMAND_PARSE_MAX_ARGS
+#define COMMAND_PARSE_MAX_ARGS 256 // Maximum number of arguments per command
+#endif
+
+#ifndef COMMAND_PARSE_MAX_ARG_LEN
+#define COMMAND_PARSE_MAX_ARG_LEN 4096
+#endif
+
+/**
+ * Error codes for command string parsing.
+ */
+typedef enum {
+  COMMAND_PARSING_OK = 0,
+  COMMAND_PARSING_UNTERMINATED_SINGLE_QUOTE,
+  COMMAND_PARSING_UNTERMINATED_DOUBLE_QUOTE,
+  COMMAND_PARSING_TRAILING_BACKSLASH,
+  COMMAND_PARSING_ARG_TOO_LONG,
+  COMMAND_PARSING_TOO_MANY_ARGS
+} CommandParsingErrorCode;
+
+/**
+ * Result of parsing a command string.
+ */
+typedef struct {
+  char **argv;
+  int argc;
+  CommandParsingErrorCode code;
+} command_parsing_result_t;
+
+/**
+ * Free resources inside a command_parsing_result_t.
+ */
+void free_command_parsing_result(command_parsing_result_t *);
+
+/**
+ * Parse shell-like command string into argv array.
+ * Supports:
+ * - Single and double quotes
+ * - Backslash escaping
+ * - Quote concatenation
+ *
+ * Returns pointer to command_parsing_result_t on success or error,
+ * NULL only on allocation failure.
+ *
+ * Caller must free result with free_command_parsing_result().
+ */
+command_parsing_result_t *parse_command_string(const char *);
 
 #endif

@@ -71,7 +71,7 @@ void assert_string_equal(const char *expected, const char *actual) {
   }
 }
 
-void test_app_add_flag() {
+static void test_app_add_flag() {
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
   assert(app != NULL);
 
@@ -102,7 +102,7 @@ void test_app_add_flag() {
   free_cli_app(app);
 }
 
-void test_help_nothing() {
+static void test_help_nothing() {
   cli_app_state_t *app = new_cli_app(&(cli_app_meta_t){0});
 
   char *help = app_help_text(app);
@@ -112,7 +112,7 @@ void test_help_nothing() {
   free_cli_app(app);
 }
 
-void test_help_bool_flag_only() {
+static void test_help_bool_flag_only() {
   cli_app_state_t *app = new_cli_app(&(cli_app_meta_t){0});
 
   app_add_flag(app, &EXAMPLE_BOOL_FLAG);
@@ -127,7 +127,7 @@ void test_help_bool_flag_only() {
   free_cli_app(app);
 }
 
-void test_help_bool_and_string_flags() {
+static void test_help_bool_and_string_flags() {
   cli_app_state_t *app = new_cli_app(&(cli_app_meta_t){0});
 
   app_add_flag(app, &EXAMPLE_BOOL_FLAG);
@@ -145,7 +145,7 @@ void test_help_bool_and_string_flags() {
   free_cli_app(app);
 }
 
-void test_help_bool_string_and_strings_flags() {
+static void test_help_bool_string_and_strings_flags() {
   cli_app_state_t *app = new_cli_app(&(cli_app_meta_t){0});
 
   app_add_flag(app, &EXAMPLE_BOOL_FLAG);
@@ -167,7 +167,7 @@ void test_help_bool_string_and_strings_flags() {
   free_cli_app(app);
 }
 
-void test_help_with_custom_flags() {
+static void test_help_with_custom_flags() {
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
   app_add_flag(app, &EXAMPLE_BOOL_FLAG);
@@ -207,7 +207,7 @@ void test_help_with_custom_flags() {
   free_cli_app(app);
 }
 
-void test_app_parse_args_common() {
+static void test_app_parse_args_common() {
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
   const flag_state_t *bool_flag = app_add_flag(app, &EXAMPLE_BOOL_FLAG);
@@ -218,13 +218,13 @@ void test_app_parse_args_common() {
                         "--strings-flag", "first",       "-m",
                         "second",         "positional1", "positional2"};
 
-  parsing_result_t *res =
+  args_parsing_result_t *res =
       app_parse_args(app, argv, sizeof(argv) / sizeof(argv[0]));
 
   assert(res->code == FLAGS_PARSING_OK);
   assert(res->message == NULL);
 
-  free_parsing_result(res);
+  free_args_parsing_result(res);
 
   assert(bool_flag->value.bool_value == true);
   assert(bool_flag->value_source == FLAG_VALUE_SOURCE_CLI);
@@ -244,7 +244,7 @@ void test_app_parse_args_common() {
   free_cli_app(app);
 }
 
-void test_app_parse_args_defaults() {
+static void test_app_parse_args_defaults() {
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
   const flag_state_t *bool_flag = app_add_flag(app, &EXAMPLE_BOOL_FLAG);
@@ -253,13 +253,13 @@ void test_app_parse_args_defaults() {
 
   const char *argv[] = {"foo"};
 
-  parsing_result_t *res =
+  args_parsing_result_t *res =
       app_parse_args(app, argv, sizeof(argv) / sizeof(argv[0]));
 
   assert(res->code == FLAGS_PARSING_OK);
   assert(res->message == NULL);
 
-  free_parsing_result(res);
+  free_args_parsing_result(res);
 
   assert(bool_flag->value.bool_value == false);
   assert(bool_flag->value_source == FLAG_VALUE_SOURCE_DEFAULT);
@@ -279,7 +279,7 @@ void test_app_parse_args_defaults() {
   free_cli_app(app);
 }
 
-void test_app_parse_args_empty() {
+static void test_app_parse_args_empty() {
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
   const flag_state_t *bool_flag = app_add_flag(app, &EXAMPLE_BOOL_FLAG);
@@ -288,12 +288,12 @@ void test_app_parse_args_empty() {
 
   const char *argv[] = {NULL};
 
-  parsing_result_t *res = app_parse_args(app, argv, 0);
+  args_parsing_result_t *res = app_parse_args(app, argv, 0);
 
   assert(res->code == FLAGS_PARSING_OK);
   assert(res->message == NULL);
 
-  free_parsing_result(res);
+  free_args_parsing_result(res);
 
   assert(bool_flag->value.bool_value == false);
   assert(bool_flag->value_source == FLAG_VALUE_SOURCE_DEFAULT);
@@ -313,7 +313,7 @@ void test_app_parse_args_empty() {
   free_cli_app(app);
 }
 
-void test_app_parse_args_env_vars() {
+static void test_app_parse_args_env_vars() {
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
   const flag_state_t *bool_flag = app_add_flag(app, &EXAMPLE_BOOL_FLAG);
@@ -327,12 +327,12 @@ void test_app_parse_args_env_vars() {
 
   const char *argv[] = {NULL};
 
-  parsing_result_t *res = app_parse_args(app, argv, 0);
+  args_parsing_result_t *res = app_parse_args(app, argv, 0);
 
   assert(res->code == FLAGS_PARSING_OK);
   assert(res->message == NULL);
 
-  free_parsing_result(res);
+  free_args_parsing_result(res);
 
   assert(bool_flag->value.bool_value == true);
   assert(bool_flag->value_source == FLAG_VALUE_SOURCE_ENV);
@@ -355,7 +355,7 @@ void test_app_parse_args_env_vars() {
   free_cli_app(app);
 }
 
-void test_app_parse_args_double_run() {
+static void test_app_parse_args_double_run() {
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
   flag_state_t *bool_flag = app_add_flag(app, &EXAMPLE_BOOL_FLAG);
@@ -368,12 +368,12 @@ void test_app_parse_args_double_run() {
   const char *argv[] = {NULL};
 
   { // first run - should not pick up env vars yet
-    parsing_result_t *res = app_parse_args(app, argv, 0);
+    args_parsing_result_t *res = app_parse_args(app, argv, 0);
 
     assert(res->code == FLAGS_PARSING_OK);
     assert(res->message == NULL);
 
-    free_parsing_result(res);
+    free_args_parsing_result(res);
 
     assert(bool_flag->value.bool_value == false);
     assert(bool_flag->value_source == FLAG_VALUE_SOURCE_DEFAULT);
@@ -386,12 +386,12 @@ void test_app_parse_args_double_run() {
     bool_flag->env_variable = strdup("FOO_1");   // <-- change env variable name
     string_flag->env_variable = strdup("FOO_2"); // <-- change env variable name
 
-    parsing_result_t *res = app_parse_args(app, argv, 0);
+    args_parsing_result_t *res = app_parse_args(app, argv, 0);
 
     assert(res->code == FLAGS_PARSING_OK);
     assert(res->message == NULL);
 
-    free_parsing_result(res);
+    free_args_parsing_result(res);
 
     assert(bool_flag->value.bool_value == true);
     assert(bool_flag->value_source == FLAG_VALUE_SOURCE_ENV);
@@ -406,30 +406,30 @@ void test_app_parse_args_double_run() {
   free_cli_app(app);
 }
 
-void test_app_parse_args_errors() {
+static void test_app_parse_args_errors() {
   { // negative argc
     cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
     const char *argv[] = {"foo", "bar"};
 
-    parsing_result_t *res = app_parse_args(app, argv, -1);
+    args_parsing_result_t *res = app_parse_args(app, argv, -1);
 
     assert(res->code == FLAGS_PARSING_INVALID_ARGUMENTS);
     assert_string_equal("invalid arguments to app_parse_args", res->message);
 
-    free_parsing_result(res);
+    free_args_parsing_result(res);
     free_cli_app(app);
   }
 
   { // NULL argv
     cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
-    parsing_result_t *res = app_parse_args(app, NULL, 999);
+    args_parsing_result_t *res = app_parse_args(app, NULL, 999);
 
     assert(res->code == FLAGS_PARSING_INVALID_ARGUMENTS);
     assert_string_equal("invalid arguments to app_parse_args", res->message);
 
-    free_parsing_result(res);
+    free_args_parsing_result(res);
     free_cli_app(app);
   }
 
@@ -438,28 +438,28 @@ void test_app_parse_args_errors() {
 
     app_add_flag(app, &EXAMPLE_BOOL_FLAG);
 
-    parsing_result_t *res =
+    args_parsing_result_t *res =
         app_parse_args(app, (const char *[]){"-b", "--unknown-flag"}, 2);
 
     assert(res->code == FLAGS_PARSING_UNKNOWN_FLAG);
     assert_string_equal("unknown flag: --unknown-flag", res->message);
 
-    free_parsing_result(res);
+    free_args_parsing_result(res);
     free_cli_app(app);
   }
 
-  { // duplicate boolflag
+  { // duplicate bool flag
     cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
     app_add_flag(app, &EXAMPLE_BOOL_FLAG);
 
-    parsing_result_t *res =
+    args_parsing_result_t *res =
         app_parse_args(app, (const char *[]){"-b", "--bool-flag"}, 2);
 
     assert(res->code == FLAGS_PARSING_DUPLICATE_FLAG);
     assert_string_equal("duplicate flag: --bool-flag", res->message);
 
-    free_parsing_result(res);
+    free_args_parsing_result(res);
     free_cli_app(app);
   }
 
@@ -468,13 +468,13 @@ void test_app_parse_args_errors() {
 
     app_add_flag(app, &EXAMPLE_STRING_FLAG);
 
-    parsing_result_t *res = app_parse_args(
+    args_parsing_result_t *res = app_parse_args(
         app, (const char *[]){"--string-flag", "value1", "-s", "value2"}, 4);
 
     assert(res->code == FLAGS_PARSING_DUPLICATE_FLAG);
     assert_string_equal("duplicate flag: -s", res->message);
 
-    free_parsing_result(res);
+    free_args_parsing_result(res);
     free_cli_app(app);
   }
 
@@ -483,13 +483,13 @@ void test_app_parse_args_errors() {
 
     app_add_flag(app, &EXAMPLE_STRING_FLAG);
 
-    parsing_result_t *res =
+    args_parsing_result_t *res =
         app_parse_args(app, (const char *[]){"--string-flag"}, 1);
 
     assert(res->code == FLAGS_PARSING_MISSING_VALUE);
     assert_string_equal("missing value for flag --string-flag", res->message);
 
-    free_parsing_result(res);
+    free_args_parsing_result(res);
     free_cli_app(app);
   }
 
@@ -498,14 +498,14 @@ void test_app_parse_args_errors() {
 
     app_add_flag(app, &EXAMPLE_STRING_FLAG);
 
-    parsing_result_t *res = app_parse_args(
+    args_parsing_result_t *res = app_parse_args(
         app, (const char *[]){"--string-flag", "invalid\r\nvalue"}, 2);
 
     assert(res->code == FLAGS_PARSING_INVALID_VALUE);
     assert_string_equal("invalid characters in value for flag --string-flag",
                         res->message);
 
-    free_parsing_result(res);
+    free_args_parsing_result(res);
     free_cli_app(app);
   }
 
@@ -514,13 +514,13 @@ void test_app_parse_args_errors() {
 
     app_add_flag(app, &EXAMPLE_STRINGS_FLAG);
 
-    parsing_result_t *res =
+    args_parsing_result_t *res =
         app_parse_args(app, (const char *[]){"--strings-flag"}, 1);
 
     assert(res->code == FLAGS_PARSING_MISSING_VALUE);
     assert_string_equal("missing value for flag --strings-flag", res->message);
 
-    free_parsing_result(res);
+    free_args_parsing_result(res);
     free_cli_app(app);
   }
 
@@ -529,15 +529,292 @@ void test_app_parse_args_errors() {
 
     app_add_flag(app, &EXAMPLE_STRINGS_FLAG);
 
-    parsing_result_t *res = app_parse_args(
+    args_parsing_result_t *res = app_parse_args(
         app, (const char *[]){"--strings-flag", "invalid\r\nvalue"}, 2);
 
     assert(res->code == FLAGS_PARSING_INVALID_VALUE);
     assert_string_equal("invalid characters in value for flag --strings-flag",
                         res->message);
 
-    free_parsing_result(res);
+    free_args_parsing_result(res);
     free_cli_app(app);
+  }
+}
+
+static void test_parse_command_string(void) {
+  command_parsing_result_t *result = NULL;
+
+  { // Empty string
+    result = parse_command_string("");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 0);
+    assert(result->argv == NULL);
+    free_command_parsing_result(result);
+  }
+
+  { // NULL string
+    result = parse_command_string(NULL);
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 0);
+    assert(result->argv == NULL);
+    free_command_parsing_result(result);
+  }
+
+  { // Single argument
+    result = parse_command_string("echo");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 1);
+    assert(strcmp(result->argv[0], "echo") == 0);
+    assert(result->argv[1] == NULL);
+    free_command_parsing_result(result);
+  }
+
+  { // Multiple arguments
+    result = parse_command_string("echo hello world");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 3);
+    assert(strcmp(result->argv[0], "echo") == 0);
+    assert(strcmp(result->argv[1], "hello") == 0);
+    assert(strcmp(result->argv[2], "world") == 0);
+    assert(result->argv[3] == NULL);
+    free_command_parsing_result(result);
+  }
+
+  { // Multiple spaces between arguments
+    result = parse_command_string("echo   hello    world");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 3);
+    assert(strcmp(result->argv[0], "echo") == 0);
+    assert(strcmp(result->argv[1], "hello") == 0);
+    assert(strcmp(result->argv[2], "world") == 0);
+    free_command_parsing_result(result);
+  }
+
+  { // Leading and trailing spaces
+    result = parse_command_string("  echo hello  ");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 2);
+    assert(strcmp(result->argv[0], "echo") == 0);
+    assert(strcmp(result->argv[1], "hello") == 0);
+    free_command_parsing_result(result);
+  }
+
+  { // Tabs as separators
+    result = parse_command_string("echo\thello\tworld");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 3);
+    assert(strcmp(result->argv[0], "echo") == 0);
+    assert(strcmp(result->argv[1], "hello") == 0);
+    assert(strcmp(result->argv[2], "world") == 0);
+    free_command_parsing_result(result);
+  }
+
+  { // Single quoted argument
+    result = parse_command_string("echo 'hello world'");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 2);
+    assert(strcmp(result->argv[0], "echo") == 0);
+    assert(strcmp(result->argv[1], "hello world") == 0);
+    free_command_parsing_result(result);
+  }
+
+  { // Double quoted argument
+    result = parse_command_string("echo \"hello world\"");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 2);
+    assert(strcmp(result->argv[0], "echo") == 0);
+    assert(strcmp(result->argv[1], "hello world") == 0);
+    free_command_parsing_result(result);
+  }
+
+  { // Empty single quotes
+    result = parse_command_string("echo ''");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 2);
+    assert(strcmp(result->argv[0], "echo") == 0);
+    assert(strcmp(result->argv[1], "") == 0);
+    free_command_parsing_result(result);
+  }
+
+  { // Empty double quotes
+    result = parse_command_string("echo \"\"");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 2);
+    assert(strcmp(result->argv[0], "echo") == 0);
+    assert(strcmp(result->argv[1], "") == 0);
+    free_command_parsing_result(result);
+  }
+
+  { // Quote concatenation
+    result = parse_command_string("echo hello'world'test");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 2);
+    assert(strcmp(result->argv[0], "echo") == 0);
+    assert(strcmp(result->argv[1], "helloworldtest") == 0);
+    free_command_parsing_result(result);
+  }
+
+  { // Mixed quotes concatenation
+    result = parse_command_string("echo 'hello'\"world\"");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 2);
+    assert(strcmp(result->argv[0], "echo") == 0);
+    assert(strcmp(result->argv[1], "helloworld") == 0);
+    free_command_parsing_result(result);
+  }
+
+  { // Escaped space
+    result = parse_command_string("echo hello\\ world");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 2);
+    assert(strcmp(result->argv[0], "echo") == 0);
+    assert(strcmp(result->argv[1], "hello world") == 0);
+    free_command_parsing_result(result);
+  }
+
+  { // Escaped quote in double quotes
+    result = parse_command_string("echo \"hello\\\"world\"");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 2);
+    assert(strcmp(result->argv[0], "echo") == 0);
+    assert(strcmp(result->argv[1], "hello\"world") == 0);
+    free_command_parsing_result(result);
+  }
+
+  { // Backslash in single quotes (literal)
+    result = parse_command_string("echo 'hello\\world'");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 2);
+    assert(strcmp(result->argv[0], "echo") == 0);
+    assert(strcmp(result->argv[1], "hello\\world") == 0);
+    free_command_parsing_result(result);
+  }
+
+  { // Escaped backslash
+    result = parse_command_string("echo hello\\\\world");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 2);
+    assert(strcmp(result->argv[0], "echo") == 0);
+    assert(strcmp(result->argv[1], "hello\\world") == 0);
+    free_command_parsing_result(result);
+  }
+
+  { // Single quote inside double quotes
+    result = parse_command_string("echo \"it's fine\"");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 2);
+    assert(strcmp(result->argv[0], "echo") == 0);
+    assert(strcmp(result->argv[1], "it's fine") == 0);
+    free_command_parsing_result(result);
+  }
+
+  { // Double quote inside single quotes
+    result = parse_command_string("echo 'say \"hello\"'");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 2);
+    assert(strcmp(result->argv[0], "echo") == 0);
+    assert(strcmp(result->argv[1], "say \"hello\"") == 0);
+    free_command_parsing_result(result);
+  }
+
+  { // Unterminated single quote
+    result = parse_command_string("echo 'hello");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_UNTERMINATED_SINGLE_QUOTE);
+    free_command_parsing_result(result);
+  }
+
+  { // Unterminated double quote
+    result = parse_command_string("echo \"hello");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_UNTERMINATED_DOUBLE_QUOTE);
+    free_command_parsing_result(result);
+  }
+
+  { // Trailing backslash
+    result = parse_command_string("echo hello\\");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_TRAILING_BACKSLASH);
+    free_command_parsing_result(result);
+  }
+
+  { // Complex command with multiple quote types
+    result = parse_command_string("git commit -m 'fix: update \"version\" number'");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 4);
+    assert(strcmp(result->argv[0], "git") == 0);
+    assert(strcmp(result->argv[1], "commit") == 0);
+    assert(strcmp(result->argv[2], "-m") == 0);
+    assert(strcmp(result->argv[3], "fix: update \"version\" number") == 0);
+    free_command_parsing_result(result);
+  }
+
+  { // Special characters
+    result = parse_command_string("echo !@#$%^&*()");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 2);
+    assert(strcmp(result->argv[0], "echo") == 0);
+    assert(strcmp(result->argv[1], "!@#$%^&*()") == 0);
+    free_command_parsing_result(result);
+  }
+
+  { // Escaped newline and tab characters
+    result = parse_command_string("echo hello\\nworld\\ttab");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 2);
+    assert(strcmp(result->argv[0], "echo") == 0);
+    assert(strcmp(result->argv[1], "hellonworldttab") == 0);
+    free_command_parsing_result(result);
+  }
+
+  { // Only whitespace
+    result = parse_command_string("   \t  \t   ");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 0);
+    assert(result->argv != NULL);
+    assert(result->argv[0] == NULL);
+    free_command_parsing_result(result);
+  }
+
+  { // Only quotes
+    result = parse_command_string("''\"\"");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 1);
+    assert(strcmp(result->argv[0], "") == 0);
+    free_command_parsing_result(result);
+  }
+
+  { // Only quotes
+    result = parse_command_string("cmd'arg1 arg2'\"arg3\"");
+    assert(result != NULL);
+    assert(result->code == COMMAND_PARSING_OK);
+    assert(result->argc == 1);
+    assert(strcmp(result->argv[0], "cmdarg1 arg2arg3") == 0);
+    free_command_parsing_result(result);
   }
 }
 
@@ -556,6 +833,8 @@ int main() {
   test_app_parse_args_env_vars();
   test_app_parse_args_double_run();
   test_app_parse_args_errors();
+
+  test_parse_command_string();
 
   return 0;
 }

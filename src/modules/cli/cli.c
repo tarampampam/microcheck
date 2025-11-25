@@ -338,7 +338,7 @@ flag_state_t *app_add_flag(cli_app_state_t *as, const flag_meta_t *fm) {
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((format(printf, 2, 3)))
 #endif
-size_t
+static size_t
 str_add_f(char **dest, const char *fmt, ...) {
   if (!dest || !fmt) {
     return 0;
@@ -611,8 +611,8 @@ static bool validate_env_name(const char *name) {
 
   // subsequent characters can be letters, digits, or underscores
   for (size_t i = 1; name[i] != '\0'; i++) {
-    if (i >= 255) {
-      return false; // exceed max length
+    if (i >= CLI_FLAG_MAX_ENV_NAME_LEN) {
+      return false; // exceeds max length
     }
 
     if (!isalnum((unsigned char)name[i]) && name[i] != '_') {
@@ -857,7 +857,7 @@ static bool app_copy_all_args(cli_app_state_t *as, const char *argv[],
 /**
  * Free resources inside a parsing_result_t.
  */
-void free_parsing_result(parsing_result_t *res) {
+void free_args_parsing_result(args_parsing_result_t *res) {
   if (!res) {
     return;
   }
@@ -881,9 +881,9 @@ void free_parsing_result(parsing_result_t *res) {
  * Returns a malloc'd parsing_result_t (caller must free) with a status code
  * and optional message describing errors. On allocation failure, returns NULL.
  */
-parsing_result_t *app_parse_args(cli_app_state_t *as, const char *argv[],
-                                 const int argc) {
-  parsing_result_t *res = malloc(sizeof(parsing_result_t));
+args_parsing_result_t *app_parse_args(cli_app_state_t *as, const char *argv[],
+                                      const int argc) {
+  args_parsing_result_t *res = malloc(sizeof(args_parsing_result_t));
   if (!res) {
     return NULL; // allocation failure
   }
@@ -954,21 +954,6 @@ parsing_result_t *app_parse_args(cli_app_state_t *as, const char *argv[],
 
         res->code = FLAGS_PARSING_UNKNOWN_FLAG;
         str_add_f(&res->message, "unknown flag: %s", arg);
-
-        if (!res->message) {
-          free(res);
-
-          return NULL;
-        }
-
-        return res;
-      }
-
-      if (!fs->meta) {
-        free(flag_buf);
-
-        res->code = FLAGS_PARSING_UNKNOWN_FLAG;
-        str_add_f(&res->message, "internal error: flag has no metadata");
 
         if (!res->message) {
           free(res);
@@ -1164,4 +1149,238 @@ parsing_result_t *app_parse_args(cli_app_state_t *as, const char *argv[],
   free(flag_buf);
 
   return res;
+}
+
+/**
+ * Free command_parsing_result_t and all associated resources.
+ */
+void free_command_parsing_result(command_parsing_result_t *result) {
+  if (!result) {
+    return;
+  }
+
+  if (result->argv) {
+    for (int i = 0; i < result->argc; i++) {
+      free(result->argv[i]);
+    }
+
+    free(result->argv);
+  }
+
+  free(result);
+}
+
+/**
+ * Helper to set error code and cleanup temporary buffer.
+ */
+static command_parsing_result_t *
+set_parse_error(command_parsing_result_t *result, char *temp_buffer,
+                const CommandParsingErrorCode code) {
+  result->code = code;
+  free(temp_buffer);
+
+  return result;
+}
+
+/**
+ * Helper to save current argument to result.
+ * Returns true on success, false on allocation failure.
+ */
+static bool save_argument(command_parsing_result_t *result,
+                          const char *arg_buffer, const int arg_len) {
+  if (result->argc >= COMMAND_PARSE_MAX_ARGS) {
+    result->code = COMMAND_PARSING_TOO_MANY_ARGS;
+
+    return false;
+  }
+
+  if (arg_len < 0 || !result->argv) {
+    return false;
+  }
+
+  /* Create null-terminated copy */
+  result->argv[result->argc] = malloc((size_t)arg_len + 1);
+  if (!result->argv[result->argc]) {
+    return false; // allocation failure
+  }
+
+  memcpy(result->argv[result->argc], arg_buffer, (size_t)arg_len);
+  result->argv[result->argc][arg_len] = '\0';
+  result->argc++;
+
+  return true;
+}
+
+/**
+ * Helper to check if character is whitespace.
+ */
+static inline bool is_whitespace(const char c) { return c == ' ' || c == '\t'; }
+
+/**
+ * Parse shell-like command string into argv array.
+ * Supports:
+ * - Single and double quotes
+ * - Backslash escaping
+ * - Quote concatenation
+ *
+ * Returns pointer to command_parsing_result_t on success or error,
+ * NULL only on allocation failure.
+ *
+ * Caller must free result with free_command_parsing_result().
+ */
+command_parsing_result_t *parse_command_string(const char *str) {
+  command_parsing_result_t *result =
+      calloc(1, sizeof(command_parsing_result_t));
+  if (!result) {
+    return NULL;
+  }
+
+  result->code = COMMAND_PARSING_OK;
+  result->argv = NULL;
+  result->argc = 0;
+
+  if (!str || !*str) {
+    return result; // empty string is valid
+  }
+
+  // allocate argv array (NULL-terminated)
+  result->argv = calloc(COMMAND_PARSE_MAX_ARGS + 1, sizeof(char *));
+  if (!result->argv) {
+    free(result);
+    return NULL;
+  }
+
+  // allocate temporary buffer for building arguments
+  char *arg_buffer = malloc(COMMAND_PARSE_MAX_ARG_LEN);
+  if (!arg_buffer) {
+    free(result->argv);
+    free(result);
+    return NULL;
+  }
+
+  // parser state
+  int arg_len = 0;
+  const char *p = str;
+  bool in_single_quote = false;
+  bool in_double_quote = false;
+  bool escaped = false;
+  bool has_content = false;
+
+  /* Main parsing loop */
+  while (*p) {
+    const char c = *p;
+
+    /* Handle escape sequences */
+    if (escaped) {
+      if (arg_len >= COMMAND_PARSE_MAX_ARG_LEN - 1) {
+        return set_parse_error(result, arg_buffer,
+                               COMMAND_PARSING_ARG_TOO_LONG);
+      }
+
+      arg_buffer[arg_len++] = c;
+      has_content = true;
+      escaped = false;
+      p++;
+
+      continue;
+    }
+
+    // start escape (only outside single quotes)
+    if (c == '\\' && !in_single_quote) {
+      escaped = true;
+      has_content = true;
+      p++;
+
+      continue;
+    }
+
+    // toggle single quotes (only outside double quotes)
+    if (c == '\'' && !in_double_quote) {
+      in_single_quote = !in_single_quote;
+      has_content = true;
+      p++;
+
+      continue;
+    }
+
+    // toggle double quotes (only outside single quotes)
+    if (c == '"' && !in_single_quote) {
+      in_double_quote = !in_double_quote;
+      has_content = true;
+      p++;
+
+      continue;
+    }
+
+    /* Whitespace outside quotes - argument separator */
+    if (is_whitespace(c) && !in_single_quote && !in_double_quote) {
+      if (has_content) {
+        if (!save_argument(result, arg_buffer, arg_len)) {
+          if (result->code == COMMAND_PARSING_TOO_MANY_ARGS) {
+            free(arg_buffer);
+
+            return result;
+          }
+
+          free(arg_buffer);
+          free_command_parsing_result(result);
+
+          return NULL; // allocation failure
+        }
+
+        arg_len = 0;
+        has_content = false;
+      }
+
+      p++;
+
+      continue;
+    }
+
+    // regular character
+    if (arg_len >= COMMAND_PARSE_MAX_ARG_LEN - 1) {
+      return set_parse_error(result, arg_buffer, COMMAND_PARSING_ARG_TOO_LONG);
+    }
+
+    arg_buffer[arg_len++] = c;
+    has_content = true;
+    p++;
+  }
+
+  // check for parse errors at end of string
+  if (in_single_quote) {
+    return set_parse_error(result, arg_buffer,
+                           COMMAND_PARSING_UNTERMINATED_SINGLE_QUOTE);
+  }
+
+  if (in_double_quote) {
+    return set_parse_error(result, arg_buffer,
+                           COMMAND_PARSING_UNTERMINATED_DOUBLE_QUOTE);
+  }
+
+  if (escaped) {
+    return set_parse_error(result, arg_buffer,
+                           COMMAND_PARSING_TRAILING_BACKSLASH);
+  }
+
+  // save final argument if present
+  if (has_content) {
+    if (!save_argument(result, arg_buffer, arg_len)) {
+      if (result->code == COMMAND_PARSING_TOO_MANY_ARGS) {
+        free(arg_buffer);
+
+        return result;
+      }
+
+      free(arg_buffer);
+      free_command_parsing_result(result);
+
+      return NULL; // allocation failure
+    }
+  }
+
+  free(arg_buffer);
+  result->argv[result->argc] = NULL; // NULL-terminate argv
+
+  return result;
 }
