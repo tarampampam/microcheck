@@ -39,6 +39,7 @@ static void free_flag_state(flag_state_t *fs) {
   }
 
   if (!fs->meta) {
+    free(fs->env_variable);
     free(fs);
 
     return;
@@ -51,11 +52,13 @@ static void free_flag_state(flag_state_t *fs) {
     break;
 
   case FLAG_TYPE_STRINGS: // free each string
-    for (size_t i = 0; i < fs->value.strings_value.count; i++) {
-      free(fs->value.strings_value.list[i]);
-    }
+    if (fs->value.strings_value.list) {
+      for (size_t i = 0; i < fs->value.strings_value.count; i++) {
+        free(fs->value.strings_value.list[i]);
+      }
 
-    free(fs->value.strings_value.list);
+      free(fs->value.strings_value.list);
+    }
 
     break;
 
@@ -76,17 +79,22 @@ void free_cli_app(cli_app_state_t *as) {
     return;
   }
 
-  for (size_t i = 0; i < as->flags.count; i++) {
-    free_flag_state(as->flags.list[i]);
+  if (as->flags.list) {
+    for (size_t i = 0; i < as->flags.count; i++) {
+      free_flag_state(as->flags.list[i]);
+    }
+
+    free(as->flags.list);
   }
 
-  free(as->flags.list);
+  if (as->args.list) {
+    for (size_t i = 0; i < as->args.count; i++) {
+      free(as->args.list[i]);
+    }
 
-  for (size_t i = 0; i < as->args.count; i++) {
-    free(as->args.list[i]);
+    free(as->args.list);
   }
 
-  free(as->args.list);
   free(as);
 }
 
@@ -150,20 +158,24 @@ static bool add_flag_value_strings(flag_state_t *fs, const char *value) {
 
   const size_t new_size = sizeof(char *) * (fs->value.strings_value.count + 1);
 
+  char *new_string = strdup(value);
+  if (!new_string) {
+    return false;
+  }
+
   // allocate new list with increased size
   char **new_list = realloc(fs->value.strings_value.list, new_size);
   if (!new_list) {
+    free(new_string);
+
     return false;
   }
 
   // update list pointer
   fs->value.strings_value.list = new_list;
 
-  // duplicate and add new string
-  fs->value.strings_value.list[fs->value.strings_value.count] = strdup(value);
-  if (!fs->value.strings_value.list[fs->value.strings_value.count]) {
-    return false;
-  }
+  // add new string
+  fs->value.strings_value.list[fs->value.strings_value.count] = new_string;
 
   // increment count
   fs->value.strings_value.count++;
@@ -227,13 +239,7 @@ static flag_state_t *new_flag_state(const flag_meta_t *fm) {
 
   switch (fm->type) {
   case FLAG_TYPE_BOOL:
-    // set default value if provided
-    if (fm->default_value.bool_value) {
-      set_flag_value_bool(fs, fm->default_value.bool_value);
-    } else {
-      set_flag_value_bool(fs, false); // default to false
-    }
-
+    set_flag_value_bool(fs, fm->default_value.bool_value);
     fs->value_source = FLAG_VALUE_SOURCE_DEFAULT;
 
     break;
@@ -375,6 +381,10 @@ str_add_f(char **dest, const char *fmt, ...) {
 
   *dest = new_buf;
 
+  if (curr_len == 0) {
+    (*dest)[0] = '\0';
+  }
+
   // append formatted string
   vsnprintf(*dest + curr_len, add_len_u + 1, fmt, args_copy);
   va_end(args_copy);
@@ -386,7 +396,7 @@ str_add_f(char **dest, const char *fmt, ...) {
  * Generate help text for the CLI application. On success, returns a
  * dynamically allocated string containing the help text or NULL on failure.
  *
- * The called must free() the returned string.
+ * The caller must free() the returned string.
  */
 char *app_help_text(const cli_app_state_t *state) {
   if (!state || !state->meta) {
@@ -411,7 +421,8 @@ char *app_help_text(const cli_app_state_t *state) {
 
   // usage
   if (state->meta->usage) {
-    if (!str_add_f(&buf, "\n\nUsage: %s %s", state->meta->name,
+    if (!str_add_f(&buf, "\n\nUsage: %s %s",
+                   state->meta->name ? state->meta->name : "app",
                    state->meta->usage)) {
       goto fail;
     }
@@ -427,6 +438,10 @@ char *app_help_text(const cli_app_state_t *state) {
     size_t max_flag_len = 0;
     for (size_t i = 0; i < state->flags.count; i++) {
       const flag_state_t *fs = state->flags.list[i];
+      if (!fs || !fs->meta) {
+        continue;
+      }
+
       const size_t short_len =
           fs->meta->short_name ? strlen(fs->meta->short_name) : 0;
       const size_t long_len =
@@ -443,14 +458,19 @@ char *app_help_text(const cli_app_state_t *state) {
       }
     }
 
-    const size_t max_with_pad = max_flag_len + 9;
-    if (max_flag_len > SIZE_MAX - 9) { // check for overflow
+    if (max_flag_len > SIZE_MAX - 9) {
       goto fail;
     }
+
+    const size_t max_with_pad = max_flag_len + 9;
 
     // append each flag
     for (size_t i = 0; i < state->flags.count; i++) {
       const flag_state_t *fs = state->flags.list[i];
+
+      if (!fs || !fs->meta) {
+        continue;
+      }
 
       size_t padding = 0;
 
@@ -529,8 +549,13 @@ char *app_help_text(const cli_app_state_t *state) {
 
           const size_t count = fs->meta->default_value.strings_value.count;
           for (size_t j = 0; j < count; j++) {
-            if (!str_add_f(&buf, "%s\"%s\"%s", j == 0 ? "" : ", ",
-                           fs->meta->default_value.strings_value.list[j],
+            const char *str_value =
+                fs->meta->default_value.strings_value.list[j];
+            if (!str_value) {
+              str_value = "(null)";
+            }
+
+            if (!str_add_f(&buf, "%s\"%s\"%s", j == 0 ? "" : ", ", str_value,
                            j + 1 < count ? "" : "])")) {
               goto fail;
             }
@@ -575,7 +600,7 @@ fail:
  * Validate environment variable name according to common POSIX rules.
  */
 static bool validate_env_name(const char *name) {
-  if (!name || !*name || *name == '\0') {
+  if (!name || !*name) {
     return false;
   }
 
@@ -674,11 +699,11 @@ static size_t app_get_longest_flag_name(const cli_app_state_t *as) {
   size_t longest = 0;
 
   for (size_t i = 0; i < as->flags.count; i++) {
-    const flag_meta_t *fm = as->flags.list[i]->meta;
-    if (!fm) {
+    if (!as->flags.list[i] || !as->flags.list[i]->meta) {
       continue;
     }
 
+    const flag_meta_t *fm = as->flags.list[i]->meta;
     const size_t long_len = fm->long_name ? strlen(fm->long_name) + 2 : 0;
     const size_t short_len = fm->short_name ? strlen(fm->short_name) + 1 : 0;
 
@@ -702,7 +727,7 @@ static size_t app_get_longest_flag_name(const cli_app_state_t *as) {
  */
 static flag_state_t *app_find_flag(const cli_app_state_t *as, char *buf,
                                    const size_t buf_size, const char *arg) {
-  if (!as || !arg) {
+  if (!as || !arg || !buf || buf_size == 0) {
     return NULL;
   }
 
@@ -713,17 +738,27 @@ static flag_state_t *app_find_flag(const cli_app_state_t *as, char *buf,
 
   for (size_t i = 0; i < as->flags.count; i++) {
     const flag_state_t *fs = as->flags.list[i];
-    const flag_meta_t *fm = fs->meta;
-    if (!fm) {
+    if (!fs || !fs->meta) {
       continue;
     }
 
+    const flag_meta_t *fm = fs->meta;
+
     // check for short flag match
     if (fm->short_name) {
-      const size_t required_len = strlen(fm->short_name) + 2; // "-" + name + '\0'
+      const size_t name_len = strlen(fm->short_name);
+      const size_t required_len = name_len + 2; // "-" + name + '\0'
+
+      if (name_len > SIZE_MAX - 2) {
+        continue;
+      }
 
       if (required_len <= buf_size) {
-        snprintf(buf, buf_size, "-%s", fm->short_name);
+        const int written = snprintf(buf, buf_size, "-%s", fm->short_name);
+        if (written < 0 || (size_t)written >= buf_size) {
+          continue;
+        }
+
         if (strcmp(arg, buf) == 0) {
           return as->flags.list[i];
         }
@@ -732,10 +767,19 @@ static flag_state_t *app_find_flag(const cli_app_state_t *as, char *buf,
 
     // check for long flag match
     if (fm->long_name) {
-      const size_t required_len = strlen(fm->long_name) + 3; // "--" + name + '\0'
+      const size_t name_len = strlen(fm->long_name);
+      const size_t required_len = name_len + 3; // "--" + name + '\0'
+
+      if (name_len > SIZE_MAX - 3) {
+        continue;
+      }
 
       if (required_len <= buf_size) {
-        snprintf(buf, buf_size, "--%s", fm->long_name);
+        const int written = snprintf(buf, buf_size, "--%s", fm->long_name);
+        if (written < 0 || (size_t)written >= buf_size) {
+          continue;
+        }
+
         if (strcmp(arg, buf) == 0) {
           return as->flags.list[i];
         }
@@ -844,6 +888,7 @@ parsing_result_t *app_parse_args(cli_app_state_t *as, const char *argv[],
     return NULL; // allocation failure
   }
 
+  res->code = FLAGS_PARSING_OK;
   res->message = NULL;
 
   if (!as || !argv || argc < 0) {
@@ -873,7 +918,9 @@ parsing_result_t *app_parse_args(cli_app_state_t *as, const char *argv[],
 
   // first, set flag values from environment variables
   for (size_t i = 0; i < as->flags.count; i++) {
-    set_flag_value_from_env(as->flags.list[i]);
+    if (as->flags.list[i]) {
+      set_flag_value_from_env(as->flags.list[i]);
+    }
   }
 
   const size_t flag_buf_size = app_get_longest_flag_name(as) + 1;
@@ -907,6 +954,21 @@ parsing_result_t *app_parse_args(cli_app_state_t *as, const char *argv[],
 
         res->code = FLAGS_PARSING_UNKNOWN_FLAG;
         str_add_f(&res->message, "unknown flag: %s", arg);
+
+        if (!res->message) {
+          free(res);
+
+          return NULL;
+        }
+
+        return res;
+      }
+
+      if (!fs->meta) {
+        free(flag_buf);
+
+        res->code = FLAGS_PARSING_UNKNOWN_FLAG;
+        str_add_f(&res->message, "internal error: flag has no metadata");
 
         if (!res->message) {
           free(res);
@@ -1068,8 +1130,8 @@ parsing_result_t *app_parse_args(cli_app_state_t *as, const char *argv[],
 
     // positional argument - copy it to args list
     if (as->args.count >= SIZE_MAX / sizeof(char *) - 1) {
-      free(res);
       free(flag_buf);
+      free(res);
 
       return NULL;
     }
@@ -1078,8 +1140,8 @@ parsing_result_t *app_parse_args(cli_app_state_t *as, const char *argv[],
     char **new_list =
         realloc(as->args.list, sizeof(char *) * (as->args.count + 1));
     if (!new_list) {
-      free(res);
       free(flag_buf);
+      free(res);
 
       return NULL; // allocation failure adding positional argument
     }
@@ -1088,8 +1150,8 @@ parsing_result_t *app_parse_args(cli_app_state_t *as, const char *argv[],
 
     as->args.list[as->args.count] = strdup(arg);
     if (!as->args.list[as->args.count]) {
-      free(res);
       free(flag_buf);
+      free(res);
 
       return NULL; // allocation failure duplicating positional argument
     }
