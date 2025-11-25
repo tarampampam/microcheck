@@ -53,6 +53,12 @@ typedef enum {
 typedef struct {
   const flag_meta_t *meta; // reference to immutable metadata
 
+  char *env_variable; // actual environment variable name (NOT supported for
+                      // FLAG_TYPE_STRINGS), may be changed at runtime, by
+                      // default copied from meta
+
+  FlagValueSource value_source; // source of the current value
+
   // current runtime value (type determined by meta->type)
   union {
     bool bool_value;
@@ -64,7 +70,6 @@ typedef struct {
     } strings_value;
   } value;
 
-  FlagValueSource value_source; // source of the current value
 } flag_state_t;
 
 /**

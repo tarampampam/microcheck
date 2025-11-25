@@ -340,6 +340,7 @@ void test_app_parse_args_env_vars() {
   assert_string_equal("env_value", string_flag->value.string_value);
   assert(string_flag->value_source == FLAG_VALUE_SOURCE_ENV);
 
+  // NOT supported for FLAG_TYPE_STRINGS, should use default value
   assert(strings_flag->value.strings_value.count == 3);
   assert_string_equal("one", strings_flag->value.strings_value.list[0]);
   assert_string_equal("two", strings_flag->value.strings_value.list[1]);
@@ -350,6 +351,57 @@ void test_app_parse_args_env_vars() {
   unsetenv(EXAMPLE_BOOL_FLAG.env_variable);
   unsetenv(EXAMPLE_STRING_FLAG.env_variable);
   unsetenv(EXAMPLE_STRINGS_FLAG.env_variable);
+
+  free_cli_app(app);
+}
+
+void test_app_parse_args_double_run() {
+  cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
+
+  flag_state_t *bool_flag = app_add_flag(app, &EXAMPLE_BOOL_FLAG);
+  flag_state_t *string_flag = app_add_flag(app, &EXAMPLE_STRING_FLAG);
+
+  // set environment values
+  setenv("FOO_1", "true", 1);
+  setenv("FOO_2", "env_value", 1);
+
+  const char *argv[] = {NULL};
+
+  { // first run - should not pick up env vars yet
+    parsing_result_t *res = app_parse_args(app, argv, 0);
+
+    assert(res->code == FLAGS_PARSING_OK);
+    assert(res->message == NULL);
+
+    free_parsing_result(res);
+
+    assert(bool_flag->value.bool_value == false);
+    assert(bool_flag->value_source == FLAG_VALUE_SOURCE_DEFAULT);
+
+    assert_string_equal("default", string_flag->value.string_value);
+    assert(string_flag->value_source == FLAG_VALUE_SOURCE_DEFAULT);
+  }
+
+  { // second run - after changing env_variable names
+    bool_flag->env_variable = strdup("FOO_1");   // <-- change env variable name
+    string_flag->env_variable = strdup("FOO_2"); // <-- change env variable name
+
+    parsing_result_t *res = app_parse_args(app, argv, 0);
+
+    assert(res->code == FLAGS_PARSING_OK);
+    assert(res->message == NULL);
+
+    free_parsing_result(res);
+
+    assert(bool_flag->value.bool_value == true);
+    assert(bool_flag->value_source == FLAG_VALUE_SOURCE_ENV);
+
+    assert_string_equal("env_value", string_flag->value.string_value);
+    assert(string_flag->value_source == FLAG_VALUE_SOURCE_ENV);
+  }
+
+  unsetenv("FOO_1");
+  unsetenv("FOO_2");
 
   free_cli_app(app);
 }
@@ -502,6 +554,7 @@ int main() {
   test_app_parse_args_defaults();
   test_app_parse_args_empty();
   test_app_parse_args_env_vars();
+  test_app_parse_args_double_run();
   test_app_parse_args_errors();
 
   return 0;

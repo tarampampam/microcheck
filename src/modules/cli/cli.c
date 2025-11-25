@@ -64,6 +64,7 @@ static void free_flag_state(flag_state_t *fs) {
     break;
   }
 
+  free(fs->env_variable);
   free(fs);
 }
 
@@ -198,6 +199,15 @@ static flag_state_t *new_flag_state(const flag_meta_t *fm) {
 
   // set metadata reference
   fs->meta = fm;
+
+  fs->env_variable = fm->env_variable
+                         ? strdup(fm->env_variable)
+                         : NULL; // copy env variable name if present
+  if (fm->env_variable && !fs->env_variable) {
+    free(fs);
+
+    return NULL;
+  }
 
   // initialize union to safe state before setting actual value
   memset(&fs->value, 0, sizeof(fs->value));
@@ -501,8 +511,8 @@ char *app_help_text(const cli_app_state_t *state) {
       }
 
       // append environment variable if present
-      if (fs->meta->env_variable) {
-        if (!str_add_f(&buf, " [$%s]", fs->meta->env_variable)) {
+      if (fs->env_variable) {
+        if (!str_add_f(&buf, " [$%s]", fs->env_variable)) {
           goto fail;
         }
       }
@@ -579,16 +589,16 @@ static bool validate_no_crlf(const char *value) {
  * Set flag value from environment variable if set.
  */
 static bool set_flag_value_from_env(flag_state_t *fs) {
-  if (!fs || !fs->meta || !fs->meta->env_variable) {
+  if (!fs || !fs->env_variable) {
     return false;
   }
 
   // validate environment variable name
-  if (!validate_env_name(fs->meta->env_variable)) {
+  if (!validate_env_name(fs->env_variable)) {
     return false;
   }
 
-  const char *env_value = getenv(fs->meta->env_variable);
+  const char *env_value = getenv(fs->env_variable);
   if (!env_value) {
     return false; // env variable not set
   }
@@ -927,8 +937,8 @@ parsing_result_t *app_parse_args(cli_app_state_t *as, const char *argv[],
         free(flag_buf);
 
         res->code = FLAGS_PARSING_UNKNOWN_FLAG;
-        str_add_f(&res->message, "internal error: unknown flag type for flag: %s",
-                  arg);
+        str_add_f(&res->message,
+                  "internal error: unknown flag type for flag: %s", arg);
 
         return res;
       }
