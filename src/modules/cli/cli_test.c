@@ -207,13 +207,53 @@ void test_help_with_custom_flags() {
   free_cli_app(app);
 }
 
+void test_app_parse_args_common() {
+  cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
+
+  const flag_state_t *bool_flag = app_add_flag(app, &EXAMPLE_BOOL_FLAG);
+  const flag_state_t *string_flag = app_add_flag(app, &EXAMPLE_STRING_FLAG);
+  const flag_state_t *strings_flag = app_add_flag(app, &EXAMPLE_STRINGS_FLAG);
+
+  const char *argv[] = {
+    "--bool-flag",
+    "-s", "custom_value",
+    "--strings-flag", "first",
+    "-m", "second",
+    "positional1",
+    "positional2"
+  };
+
+  const parsing_result_t result = app_parse_args(app, argv, sizeof(argv) / sizeof(argv[0]));
+
+  assert(result.code == FLAGS_PARSING_OK);
+
+  free_parsing_result(result);
+
+  assert(bool_flag->value.bool_value == true);
+  assert_string_equal(string_flag->value.string_value, "custom_value");
+
+  printf("%d\n", (int) strings_flag->value.strings_value.count);
+  assert(strings_flag->value.strings_value.count == 2);
+  assert_string_equal(strings_flag->value.strings_value.list[0], "first");
+  assert_string_equal(strings_flag->value.strings_value.list[1], "second");
+
+  assert(app->args.count == 2);
+  assert_string_equal(app->args.list[0], "positional1");
+  assert_string_equal(app->args.list[1], "positional2");
+
+  free_cli_app(app);
+}
+
 int main() {
   test_app_add_flag();
+
   test_help_nothing();
   test_help_bool_flag_only();
   test_help_bool_and_string_flags();
   test_help_bool_string_and_strings_flags();
   test_help_with_custom_flags();
+
+  test_app_parse_args_common();
 
   return 0;
 }

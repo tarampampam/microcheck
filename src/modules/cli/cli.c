@@ -207,6 +207,8 @@ static flag_state_t *new_flag_state(const flag_meta_t *fm) {
     // set default value if provided
     if (fm->default_value.bool_value) {
       set_flag_value_bool(fs, fm->default_value.bool_value);
+
+      fs->value_source = FLAG_VALUE_SOURCE_DEFAULT;
     } else {
       set_flag_value_bool(fs, false); // default to false
     }
@@ -214,8 +216,6 @@ static flag_state_t *new_flag_state(const flag_meta_t *fm) {
     break;
 
   case FLAG_TYPE_STRING:
-    fs->value.string_value = NULL;
-
     // set default string value if provided
     if (fm->default_value.string_value) {
       if (!set_flag_value_string(fs, fm->default_value.string_value)) {
@@ -223,14 +223,15 @@ static flag_state_t *new_flag_state(const flag_meta_t *fm) {
 
         return NULL;
       }
+
+      fs->value_source = FLAG_VALUE_SOURCE_DEFAULT;
+    } else {
+      fs->value.string_value = NULL; // default to NULL
     }
 
     break;
 
   case FLAG_TYPE_STRINGS:
-    fs->value.strings_value.list = NULL;
-    fs->value.strings_value.count = 0;
-
     // set default strings if provided
     if (fm->default_value.strings_value.list &&
         fm->default_value.strings_value.count > 0) {
@@ -240,6 +241,11 @@ static flag_state_t *new_flag_state(const flag_meta_t *fm) {
 
         return NULL;
       }
+
+      fs->value_source = FLAG_VALUE_SOURCE_DEFAULT;
+    } else {
+      fs->value.strings_value.list = NULL; // default to empty list
+      fs->value.strings_value.count = 0;
     }
 
     break;
@@ -597,6 +603,7 @@ static bool set_flag_value_from_env(flag_state_t *fs) {
     if (strcmp(env_value, "1") == 0 || strcasecmp(env_value, "true") == 0 ||
         strcasecmp(env_value, "yes") == 0) {
       set_flag_value_bool(fs, true);
+      fs->value_source = FLAG_VALUE_SOURCE_ENV;
 
       return true;
     }
@@ -605,7 +612,11 @@ static bool set_flag_value_from_env(flag_state_t *fs) {
 
   case FLAG_TYPE_STRING:
     if (validate_no_crlf(env_value)) {
-      return set_flag_value_string(fs, env_value);
+      if (set_flag_value_string(fs, env_value)) {
+        fs->value_source = FLAG_VALUE_SOURCE_ENV;
+
+        return true;
+      }
     }
 
     break;
@@ -617,97 +628,320 @@ static bool set_flag_value_from_env(flag_state_t *fs) {
   return false;
 }
 
-// FlagsParsingError app_parse_args(cli_app_state_t *state, char *argv[],
-//                                  const int argc) {
-//   if (!state || !argv || argc < 1) {
-//     return FLAGS_PARSING_ERROR_INVALID_ARGUMENTS;
-//   }
-//
-//   if (state->flags.count == 0) {
-//     return FLAGS_PARSING_OK; // nothing to parse
-//   }
-//
-//   // calculate the longest flag length for buffer allocation
-//   size_t longest_flag_len = 0;
-//   for (size_t i = 0; i < state->flags.count; i++) {
-//     const flag_meta_t *m = state->flags.list[i]->meta;
-//     if (!m) {
-//       continue;
-//     }
-//
-//     const size_t long_len = m->long_name ? strlen(m->long_name) + 2 : 0;
-//     const size_t short_len = m->short_name ? strlen(m->short_name) + 1 : 0;
-//
-//     if (long_len > longest_flag_len) {
-//       longest_flag_len = long_len;
-//     }
-//
-//     if (short_len > longest_flag_len) {
-//       longest_flag_len = short_len;
-//     }
-//   }
-//
-//   if (longest_flag_len == 0 || longest_flag_len >= SIZE_MAX - 3) {
-//     return FLAGS_PARSING_ERROR_INVALID_ARGUMENTS; // overflow or no flags
-//   }
-//
-//   // buffer to hold flag strings for comparison
-//   char buf[longest_flag_len + 1]; // +1 for null terminator
-//
-//   bool positional_only = false; // set to true after "--"
-//
-//   for (int i = 1; i < argc; i++) {
-//     const char *arg = argv[i];
-//
-//     // check for "--" separator
-//     if (!positional_only && strcmp(arg, "--") == 0) {
-//       positional_only = true;
-//
-//       continue;
-//     }
-//
-//     if (strlen(arg) < 2 || arg[0] != '-') {
-//       continue; // not a flag
-//     }
-//
-//     char *value = NULL;
-//
-//     for (size_t j = 0; j < state->flags.count; j++) {
-//       const flag_state_t *f = state->flags.list[j];
-//       const flag_meta_t *m = f->meta;
-//       if (!m) {
-//         continue;
-//       }
-//
-//       // check for short flag match
-//       if (m->short_name) {
-//         snprintf(buf, sizeof(buf), "-%s", m->short_name);
-//         if (strcmp(arg, buf) == 0) {
-//           // matched short flag
-//           if (i + 1 >= argc) {
-//             return FLAGS_PARSING_ERROR_MISSING_VALUE;
-//           }
-//
-//           // note: increment i to consume the value and skip the next
-//           argument
-//           // from being parsed as a flag
-//           value = argv[++i];
-//         }
-//       } else if (m->long_name) {
-//         // check for long flag match
-//         snprintf(buf, sizeof(buf), "--%s", m->long_name);
-//         if (strcmp(arg, buf) == 0) {
-//           // matched long flag
-//           if (i + 1 >= argc) {
-//             return FLAGS_PARSING_ERROR_MISSING_VALUE;
-//           }
-//
-//           // note: increment i to consume the value and skip the next
-//           argument
-//           // from being parsed as a flag
-//           value = argv[++i];
-//         }
-//       }
-//     }
-//   }
-// }
+/**
+ * Get the length of the longest flag name (short or long) including prefix
+ * dashes.
+ */
+static size_t app_get_longest_flag_name(const cli_app_state_t *as) {
+  size_t longest = 0;
+
+  for (size_t i = 0; i < as->flags.count; i++) {
+    const flag_meta_t *fm = as->flags.list[i]->meta;
+    if (!fm) {
+      continue;
+    }
+
+    const size_t long_len = fm->long_name ? strlen(fm->long_name) + 2 : 0;
+    const size_t short_len = fm->short_name ? strlen(fm->short_name) + 1 : 0;
+
+    if (long_len > longest) {
+      longest = long_len;
+    }
+
+    if (short_len > longest) {
+      longest = short_len;
+    }
+  }
+
+  return longest;
+}
+
+/**
+ * Find a flag by its short or long name (provided arg should start with '-' for
+ * matching with short name or '--' for long name).
+ *
+ * Returns NULL if not found.
+ */
+static flag_state_t *app_find_flag(const cli_app_state_t *as, char *buf,
+                                   const size_t buf_size, const char *arg) {
+  if (!as || !arg || strlen(arg) < 2) {
+    return NULL;
+  }
+
+  for (size_t i = 0; i < as->flags.count; i++) {
+    const flag_state_t *fs = as->flags.list[i];
+    const flag_meta_t *fm = fs->meta;
+    if (!fm) {
+      continue;
+    }
+
+    // check for short flag match
+    if (fm->short_name) {
+      snprintf(buf, buf_size, "-%s", fm->short_name);
+      if (strcmp(arg, buf) == 0) {
+        return as->flags.list[i];
+      }
+    }
+
+    // check for long flag match
+    if (fm->long_name) {
+      snprintf(buf, buf_size, "--%s", fm->long_name);
+      if (strcmp(arg, buf) == 0) {
+        return as->flags.list[i];
+      }
+    }
+  }
+
+  return NULL; // not found
+}
+
+/**
+ * Copy all command-line arguments as-is to the app state args.
+ */
+static bool app_copy_all_args(cli_app_state_t *as, const char *argv[],
+                              const int argc) {
+  // clear existing arguments if any
+  if (as->args.list && as->args.count > 0) {
+    for (size_t i = 0; i < as->args.count; i++) {
+      free(as->args.list[i]);
+    }
+
+    free(as->args.list);
+    as->args.list = NULL;
+    as->args.count = 0;
+  }
+
+  // copy all argv entries
+  as->args.list = malloc(sizeof(char *) * (size_t)argc);
+  if (!as->args.list) {
+    return false;
+  }
+
+  for (size_t i = 0; i < (size_t)argc; i++) {
+    as->args.list[i] = strdup(argv[i]);
+    if (!as->args.list[i]) {
+      // free previously allocated entries
+      for (size_t j = 0; j < i; j++) {
+        free(as->args.list[j]);
+      }
+
+      free(as->args.list);
+      as->args.list = NULL;
+      as->args.count = 0;
+
+      return false;
+    }
+  }
+
+  as->args.count = (size_t)argc;
+
+  return true;
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((format(printf, 2, 3)))
+#endif
+static parsing_result_t
+new_parsing_result(const FlagsParsingErrorCode code, const char *fmt, ...) {
+  parsing_result_t res;
+  res.code = code;
+  res.message = NULL;
+
+  if (fmt) {
+    va_list args;
+    va_start(args, fmt);
+
+    va_list args_copy;
+    va_copy(args_copy, args);
+    const int len = vsnprintf(NULL, 0, fmt, args_copy);
+    va_end(args_copy);
+
+    if (len > 0) {
+      res.message = malloc((size_t)len + 1);
+      if (res.message) {
+        vsnprintf(res.message, (size_t)len + 1, fmt, args);
+      }
+    }
+
+    va_end(args);
+  }
+
+  return res;
+}
+
+/**
+ * Free resources inside a parsing_result_t.
+ */
+void free_parsing_result(parsing_result_t result) {
+  if (result.message) {
+    free(result.message);
+    result.message = NULL;
+  }
+
+  result.code = 0;
+}
+
+parsing_result_t app_parse_args(cli_app_state_t *as, const char *argv[],
+                                const int argc) {
+  if (!as || !argv || argc < 0) {
+    return new_parsing_result(FLAGS_PARSING_ERROR_INVALID_ARGUMENTS,
+                              "invalid arguments to app_parse_args");
+  }
+
+  // if we have no flags defined, just copy all argv entries as-is to args
+  if (as->flags.count == 0) {
+    return app_copy_all_args(as, argv, argc)
+               ? new_parsing_result(FLAGS_PARSING_OK, NULL)
+               : new_parsing_result(FLAGS_PARSING_INTERNAL_ERROR,
+                                    "failed to copy arguments");
+  }
+
+  // first, set flag values from environment variables
+  for (size_t i = 0; i < as->flags.count; i++) {
+    set_flag_value_from_env(as->flags.list[i]);
+  }
+
+  const size_t flag_buf_size = app_get_longest_flag_name(as) + 1;
+  char *flag_buf = malloc(flag_buf_size);
+  if (!flag_buf) {
+    return new_parsing_result(FLAGS_PARSING_INTERNAL_ERROR,
+                              "failed to allocate temporary buffer");
+  }
+
+  // next, parse command-line arguments
+  for (int i = 0; i < argc; i++) {
+    printf("================ %d =================\n", i);
+
+    const char *arg = argv[i];
+
+    printf("=== Parsing arg: %s\n", arg);
+
+    if (arg == NULL) {
+      continue; // skip NULL arguments
+    }
+
+    // if arg starts with '-', it's a flag
+    if (arg[0] == '-') {
+      printf("=== Flag detected: %s\n", arg);
+
+      // find the flag
+      flag_state_t *fs = app_find_flag(as, flag_buf, flag_buf_size, arg);
+      if (!fs) {
+        free(flag_buf);
+
+        return new_parsing_result(FLAGS_PARSING_UNKNOWN_FLAG, "unknown flag");
+      }
+
+      switch (fs->meta->type) {
+      case FLAG_TYPE_BOOL:
+        set_flag_value_bool(fs, true); // presence sets to true
+
+        printf("=== Set value TRUE to %s\n", arg);
+
+        continue;
+
+      case FLAG_TYPE_STRING:
+        if (i + 1 >= argc) {
+          free(flag_buf);
+
+          return new_parsing_result(FLAGS_PARSING_ERROR_MISSING_VALUE,
+                                    "missing value for flag %s", arg);
+        }
+
+        if (!validate_no_crlf(argv[i + 1])) {
+          free(flag_buf);
+
+          return new_parsing_result(FLAGS_PARSING_INTERNAL_ERROR,
+                                    "invalid characters in value for flag %s",
+                                    arg);
+        }
+
+        if (!set_flag_value_string(fs, argv[i + 1])) {
+          free(flag_buf);
+
+          return new_parsing_result(
+              FLAGS_PARSING_INTERNAL_ERROR,
+              "allocation failure setting value for flag %s", arg);
+        }
+
+        printf("=== Set value \"%s\" to %s\n", argv[i + 1], arg);
+
+        i++; // consume next arg
+
+        continue;
+
+      case FLAG_TYPE_STRINGS:
+        if (i + 1 >= argc) {
+          free(flag_buf);
+
+          return new_parsing_result(FLAGS_PARSING_ERROR_MISSING_VALUE,
+                                    "missing value for flag %s", arg);
+        }
+
+        // in case if the flag was previously set by env var or default,
+        // clear existing strings
+        if (fs->value_source != FLAG_VALUE_SOURCE_CLI) {
+          clear_flag_strings(fs);
+
+          fs->value_source = FLAG_VALUE_SOURCE_CLI;
+        }
+
+        if (!validate_no_crlf(argv[i + 1])) {
+          free(flag_buf);
+
+          return new_parsing_result(FLAGS_PARSING_INTERNAL_ERROR,
+                                    "invalid characters in value for flag %s",
+                                    arg);
+        }
+
+        if (!add_flag_value_strings(fs, argv[i + 1])) {
+          free(flag_buf);
+
+          return new_parsing_result(
+              FLAGS_PARSING_INTERNAL_ERROR,
+              "allocation failure adding value for flag %s", arg);
+        }
+
+        printf("=== Set value \"%s\" to %s\n", argv[i + 1], arg);
+
+        i++; // consume next arg
+
+        continue;
+
+      default:
+        free(flag_buf);
+
+        return new_parsing_result(FLAGS_PARSING_INTERNAL_ERROR,
+                                  "unknown flag type for flag %s", arg);
+      }
+    }
+
+    // positional argument - copy it to args list
+    // allocate new list with increased size
+    char **new_list =
+        realloc(as->args.list, sizeof(char *) * (as->args.count + 1));
+    if (!new_list) {
+      free(flag_buf);
+
+      return new_parsing_result(FLAGS_PARSING_INTERNAL_ERROR,
+                                "allocation failure adding positional "
+                                "argument");
+    }
+    as->args.list = new_list;
+
+    as->args.list[as->args.count] = strdup(arg);
+    if (!as->args.list[as->args.count]) {
+      free(flag_buf);
+
+      return new_parsing_result(FLAGS_PARSING_INTERNAL_ERROR,
+                                "allocation failure adding positional "
+                                "argument");
+    }
+
+    as->args.count++;
+  }
+
+  free(flag_buf);
+
+  return new_parsing_result(FLAGS_PARSING_OK, NULL);
+}

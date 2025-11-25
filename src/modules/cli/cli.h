@@ -32,6 +32,13 @@ typedef struct {
   } default_value;
 } flag_meta_t;
 
+typedef enum {
+  FLAG_VALUE_SOURCE_NONE = 0,
+  FLAG_VALUE_SOURCE_DEFAULT,
+  FLAG_VALUE_SOURCE_ENV,
+  FLAG_VALUE_SOURCE_CLI,
+} FlagValueSource;
+
 // Mutable state for a single flag.
 typedef struct {
   const flag_meta_t *meta; // reference to immutable metadata
@@ -46,6 +53,8 @@ typedef struct {
       size_t count; // number of strings currently in the list
     } strings_value;
   } value;
+
+  FlagValueSource value_source; // source of the current value
 } flag_state_t;
 
 // Metadata describing the CLI application itself.
@@ -91,27 +100,31 @@ flag_state_t *app_add_flag(cli_app_state_t *, const flag_meta_t *);
 // The returned string is dynamically allocated and must be freed by the caller.
 char *app_help_text(const cli_app_state_t *);
 
-// typedef enum {
-//   FLAGS_PARSING_OK = 0,
-//   FLAGS_PARSING_ERROR_INVALID_ARGUMENTS,
-//   FLAGS_PARSING_ERROR_MISSING_VALUE,
-//   FLAGS_PARSING_UNKNOWN_FLAG,
-//   FLAGS_PARSING_INVALID_VALUE,
-//   FLAGS_PARSING_DUPLICATE_FLAG,
-//   FLAGS_PARSING_INVALID_ENV_NAME,
-//   FLAGS_PARSING_ALLOCATION_FAILURE
-// } FlagsParsingError;
+typedef enum {
+  FLAGS_PARSING_OK = 0,
+  FLAGS_PARSING_ERROR_INVALID_ARGUMENTS,
+  // FLAGS_PARSING_ERROR_ALLOCATION_FAILED,
+  FLAGS_PARSING_ERROR_MISSING_VALUE,
+  FLAGS_PARSING_UNKNOWN_FLAG,
+  // FLAGS_PARSING_INVALID_VALUE,
+  // FLAGS_PARSING_DUPLICATE_FLAG,
+  // FLAGS_PARSING_INVALID_ENV_NAME,
+  FLAGS_PARSING_INTERNAL_ERROR,
+} FlagsParsingErrorCode;
+
+typedef struct {
+  FlagsParsingErrorCode code;
+  char *message; // human-readable error message, or NULL on success
+} parsing_result_t;
+
+void free_parsing_result(parsing_result_t);
 
 // Parse environment variables for all registered flags.
 // This should be called before app_parse_args to give env vars lower priority.
 // Returns FLAGS_PARSING_OK on success, or an error code on failure.
-//FlagsParsingError app_parse_env_vars(cli_app_state_t *state);
+// FlagsParsingError app_parse_env_vars(cli_app_state_t *state);
 
-// Parse command line arguments and populate flag values and positional arguments.
-// Supports short flags (-f), long flags (--flag), values via space or = separator.
-// Supports POSIX -- separator to treat remaining args as positional.
-// Returns FLAGS_PARSING_OK on success, or an error code on failure.
-//FlagsParsingError app_parse_args(cli_app_state_t *state, char *argv[],
-//                                 const int argc);
+parsing_result_t app_parse_args(cli_app_state_t *, const char *argv[],
+                                int argc);
 
 #endif
