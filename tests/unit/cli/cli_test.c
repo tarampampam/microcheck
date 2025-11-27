@@ -1,4 +1,4 @@
-#include "../cli.h"
+#include "../../../lib/cli/cli.h"
 #include <assert.h>
 
 #include <stdio.h>

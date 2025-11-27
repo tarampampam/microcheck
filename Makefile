@@ -43,7 +43,7 @@ build/lib/cli.a: $(patsubst lib/cli/%.c,build/obj/%.o,$(wildcard lib/cli/*.c))
 	ar rcs $@ $^
 
 ## Build CLI module test binary
-build/bin/cli_test: lib/cli/tests/cli_test.c build/lib/cli.a
+build/bin/cli_test: tests/unit/cli/cli_test.c build/lib/cli.a
 	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -o $@ $< build/lib/cli.a
 
@@ -55,11 +55,6 @@ apps/version.h:
 #src/modules/obj/cli.o: lib/cli lib/cli
 #	$(CC) -c $(CFLAGS) -o $@ $<
 
-build/bin/httpcheck: apps/httpcheck.c apps/version.h
-	mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -o $@ $<
-	strip $(STRIP_FLAGS) $@
-
 build/bin/httpscheck: apps/httpcheck.c apps/version.h lib/mbedtls4/build
 	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -DWITH_TLS \
@@ -69,6 +64,11 @@ build/bin/httpscheck: apps/httpcheck.c apps/version.h lib/mbedtls4/build
 		-Llib/mbedtls4/build/library \
 		-o $@ $< \
 		-lmbedtls -lmbedx509 -ltfpsacrypto
+	strip $(STRIP_FLAGS) $@
+
+build/bin/httpcheck: apps/httpcheck.c apps/version.h
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -o $@ $<
 	strip $(STRIP_FLAGS) $@
 
 build/bin/portcheck: apps/portcheck.c apps/version.h
