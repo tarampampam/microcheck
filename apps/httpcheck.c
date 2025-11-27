@@ -8,7 +8,6 @@
  */
 
 #include "version.h"
-#include <arpa/inet.h>
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
@@ -25,10 +24,11 @@
 #include <unistd.h>
 
 #ifdef WITH_TLS
-#include "mbedtls/error.h"
-#include "mbedtls/net_sockets.h"
-#include "mbedtls/ssl.h"
-#include "psa/crypto.h"
+#include "../lib/mbedtls4/include/mbedtls/error.h"
+#include "../lib/mbedtls4/include/mbedtls/mbedtls_config.h"
+#include "../lib/mbedtls4/include/mbedtls/net_sockets.h"
+#include "../lib/mbedtls4/include/mbedtls/ssl.h"
+#include "../lib/mbedtls4/tf-psa-crypto/include/psa/crypto.h"
 #endif
 
 #ifndef WITH_TLS

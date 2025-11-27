@@ -2,12 +2,11 @@
 /.vscode
 /.idea
 
-## Bin
-/httpcheck
-/httpscheck
-/portcheck
-/parallel
-/pidcheck
+## Build
+/build
+
+## Generated files
+/apps/version.h
 
 ## Temp dirs & trash
 /.test-certs

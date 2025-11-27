@@ -11,7 +11,7 @@ typedef enum {
   FLAG_TYPE_BOOL,   // boolean flag (on/off)
   FLAG_TYPE_STRING, // single string value
   FLAG_TYPE_STRINGS // multiple string values (list)
-} FlagType;
+} CliFlagType;
 
 /**
  * Metadata for a single CLI flag (immutable descriptor).
@@ -23,7 +23,7 @@ typedef struct {
   const char *env_variable; // optional environment variable name (NOT
                             // supported for FLAG_TYPE_STRINGS)
 
-  const FlagType type; // type of value this flag stores
+  const CliFlagType type; // type of value this flag stores
 
   // default value for the flag (type depends on 'type' field)
   union {
@@ -35,7 +35,7 @@ typedef struct {
       const size_t count; // number of strings in the array
     } strings_value;
   } default_value;
-} flag_meta_t;
+} cli_flag_meta_t;
 
 /**
  * Source of the current flag value.
@@ -45,19 +45,19 @@ typedef enum {
   FLAG_VALUE_SOURCE_DEFAULT,
   FLAG_VALUE_SOURCE_ENV,
   FLAG_VALUE_SOURCE_CLI,
-} FlagValueSource;
+} CliFlagValueSource;
 
 /**
  * Mutable state for a single flag.
  */
 typedef struct {
-  const flag_meta_t *meta; // reference to immutable metadata
+  const cli_flag_meta_t *meta; // reference to immutable metadata
 
   char *env_variable; // actual environment variable name (NOT supported for
                       // FLAG_TYPE_STRINGS), may be changed at runtime, by
                       // default copied from meta
 
-  FlagValueSource value_source; // source of the current value
+  CliFlagValueSource value_source; // source of the current value
 
   // current runtime value (type determined by meta->type)
   union {
@@ -70,7 +70,7 @@ typedef struct {
     } strings_value;
   } value;
 
-} flag_state_t;
+} cli_flag_state_t;
 
 /**
  * Metadata describing the CLI application itself.
@@ -91,8 +91,8 @@ typedef struct {
 
   // dynamic array of registered flags
   struct {
-    flag_state_t **list; // array of pointers to flag states
-    size_t count;        // current number of flags
+    cli_flag_state_t **list; // array of pointers to flag states
+    size_t count;            // current number of flags
   } flags;
 
   // cli arguments (excluding flags)
@@ -125,7 +125,7 @@ void free_cli_app(cli_app_state_t *);
  * In typical usage, flags should not be mutated after parsing; mutation is
  * intended only for advanced use cases.
  */
-flag_state_t *app_add_flag(cli_app_state_t *, const flag_meta_t *);
+cli_flag_state_t *cli_app_add_flag(cli_app_state_t *, const cli_flag_meta_t *);
 
 /**
  * Generate help text for the CLI application.
@@ -133,7 +133,7 @@ flag_state_t *app_add_flag(cli_app_state_t *, const flag_meta_t *);
  * Returns a dynamically allocated string containing the help text,
  * or NULL on failure. Caller must free() the returned string.
  */
-char *app_help_text(const cli_app_state_t *);
+char *cli_app_help(const cli_app_state_t *);
 
 /**
  * Error codes for argument parsing.
@@ -145,20 +145,20 @@ typedef enum {
   FLAGS_PARSING_UNKNOWN_FLAG,
   FLAGS_PARSING_INVALID_VALUE,
   FLAGS_PARSING_DUPLICATE_FLAG,
-} ArgsParsingErrorCode;
+} CliArgsParsingErrorCode;
 
 /**
  * Result of parsing command-line arguments.
  */
 typedef struct {
-  ArgsParsingErrorCode code;
+  CliArgsParsingErrorCode code;
   char *message; // human-readable error message, or NULL on success
-} args_parsing_result_t;
+} cli_args_parsing_result_t;
 
 /**
  * Free resources inside a parsing_result_t.
  */
-void free_args_parsing_result(args_parsing_result_t *);
+void free_cli_args_parsing_result(cli_args_parsing_result_t *);
 
 #ifndef CLI_FLAG_MAX_ENV_NAME_LEN
 #define CLI_FLAG_MAX_ENV_NAME_LEN 255
@@ -167,12 +167,18 @@ void free_args_parsing_result(args_parsing_result_t *);
 /**
  * Parse command-line arguments into the application state.
  *
+ * Reads environment variables for flags, then processes argv/argc:
+ * - recognizes boolean, string, and multi-string flags (short and long names;
+ *   in forms -f, --flag, --flag=value),
+ * - sets flag values (CLI overrides env/defaults),
+ * - collects positional arguments into state->args.
+ *
  * Returns NULL on allocation failure, or a malloc'd parsing_result_t
- * (caller must free_args_parsing_result()) with a status code and optional
+ * (caller must free_cli_args_parsing_result()) with a status code and optional
  * message describing errors.
  */
-args_parsing_result_t *app_parse_args(cli_app_state_t *, const char *argv[],
-                                      int argc);
+cli_args_parsing_result_t *cli_app_parse_args(cli_app_state_t *,
+                                              const char *argv[], int argc);
 
 #ifndef COMMAND_PARSE_MAX_ARGS
 #define COMMAND_PARSE_MAX_ARGS 256 // Maximum number of arguments per command
@@ -192,7 +198,7 @@ typedef enum {
   COMMAND_PARSING_TRAILING_BACKSLASH,
   COMMAND_PARSING_ARG_TOO_LONG,
   COMMAND_PARSING_TOO_MANY_ARGS
-} CommandParsingErrorCode;
+} CliCommandParsingErrorCode;
 
 /**
  * Result of parsing a command string.
@@ -200,13 +206,13 @@ typedef enum {
 typedef struct {
   char **argv;
   int argc;
-  CommandParsingErrorCode code;
-} command_parsing_result_t;
+  CliCommandParsingErrorCode code;
+} cli_command_parsing_result_t;
 
 /**
- * Free resources inside a command_parsing_result_t.
+ * Free resources inside a cli_command_parsing_result_t.
  */
-void free_command_parsing_result(command_parsing_result_t *);
+void free_cli_command_parsing_result(cli_command_parsing_result_t *);
 
 /**
  * Parse shell-like command string into argv array.
@@ -215,11 +221,11 @@ void free_command_parsing_result(command_parsing_result_t *);
  * - Backslash escaping
  * - Quote concatenation
  *
- * Returns pointer to command_parsing_result_t on success or error,
+ * Returns pointer to cli_command_parsing_result_t on success or error,
  * NULL only on allocation failure.
  *
- * Caller must free result with free_command_parsing_result().
+ * Caller must free result with free_cli_command_parsing_result().
  */
-command_parsing_result_t *parse_command_string(const char *);
+cli_command_parsing_result_t *cli_parse_command_string(const char *);
 
 #endif
