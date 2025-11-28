@@ -81,9 +81,9 @@ build/bin/parallel: apps/parallel.c apps/version.h
 	$(CC) $(CFLAGS) -o $@ $<
 	strip $(STRIP_FLAGS) $@
 
-build/bin/pidcheck: apps/pidcheck.c apps/version.h
+build/bin/pidcheck: apps/pidcheck.c apps/version.h build/lib/cli.a
 	mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -o $@ $<
+	$(CC) $(CFLAGS) -o $@ $< build/lib/cli.a
 	strip $(STRIP_FLAGS) $@
 
 SRC_FILES := $(shell find ./apps ./lib/cli -type f \( -name '*.c' -o -name '*.h' \) ! -path '*/apps/version.h')

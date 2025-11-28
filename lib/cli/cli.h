@@ -38,6 +38,11 @@ typedef struct {
 } cli_flag_meta_t;
 
 /**
+ * Predefined help flag metadata.
+ */
+extern const cli_flag_meta_t CLI_HELP_FLAG_META;
+
+/**
  * Source of the current flag value.
  */
 typedef enum {
@@ -55,7 +60,9 @@ typedef struct {
 
   char *env_variable; // actual environment variable name (NOT supported for
                       // FLAG_TYPE_STRINGS), may be changed at runtime, by
-                      // default copied from meta
+                      // default copied from meta.
+                      // DO NOT set to this field something, that may be
+                      // freed by the caller to avoid double-free, use strdup().
 
   CliFlagValueSource value_source; // source of the current value
 
@@ -136,6 +143,11 @@ cli_flag_state_t *cli_app_add_flag(cli_app_state_t *, const cli_flag_meta_t *);
 char *cli_app_help(const cli_app_state_t *);
 
 /**
+ * Validate environment variable name according to common POSIX rules.
+ */
+bool cli_validate_env_name(const char *name);
+
+/**
  * Error codes for argument parsing.
  */
 typedef enum {
@@ -181,7 +193,8 @@ cli_args_parsing_result_t *cli_app_parse_args(cli_app_state_t *,
                                               const char *argv[], int argc);
 
 #ifndef CLI_COMMAND_PARSE_MAX_ARGS
-#define CLI_COMMAND_PARSE_MAX_ARGS 256 // Maximum number of arguments per command
+#define CLI_COMMAND_PARSE_MAX_ARGS                                             \
+  256 // Maximum number of arguments per command
 #endif
 
 #ifndef CLI_COMMAND_PARSE_MAX_ARG_LEN

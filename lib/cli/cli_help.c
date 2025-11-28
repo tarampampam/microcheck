@@ -1,11 +1,8 @@
 #include "cli.h"
 
-#include <stdarg.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 /**
  * Append strings to a dynamically allocated buffer.
@@ -100,7 +97,7 @@ char *cli_app_help(const cli_app_state_t *state) {
   // app name and version
   if (!str_add_strs(&buf, (const char *[]){
                               state->meta->name ? state->meta->name : "app",
-                              state->meta->version ? " " : "",
+                              state->meta->version ? " version " : "",
                               state->meta->version ? state->meta->version : "",
                               NULL})) {
     goto fail;

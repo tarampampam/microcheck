@@ -71,7 +71,7 @@ static void assert_string_equal(const char *expected, const char *actual) {
   }
 }
 
-static void test_cli_app_add_flag() {
+static void test_cli_app_add_flag(void) {
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
   assert(app != NULL);
 
@@ -104,7 +104,7 @@ static void test_cli_app_add_flag() {
   free_cli_app(app);
 }
 
-static void test_help_nothing() {
+static void test_help_nothing(void) {
   cli_app_state_t *app = new_cli_app(&(cli_app_meta_t){0});
 
   char *help = cli_app_help(app);
@@ -114,7 +114,7 @@ static void test_help_nothing() {
   free_cli_app(app);
 }
 
-static void test_help_bool_flag_only() {
+static void test_help_bool_flag_only(void) {
   cli_app_state_t *app = new_cli_app(&(cli_app_meta_t){0});
 
   cli_app_add_flag(app, &EXAMPLE_BOOL_FLAG);
@@ -129,7 +129,7 @@ static void test_help_bool_flag_only() {
   free_cli_app(app);
 }
 
-static void test_help_bool_and_string_flags() {
+static void test_help_bool_and_string_flags(void) {
   cli_app_state_t *app = new_cli_app(&(cli_app_meta_t){0});
 
   cli_app_add_flag(app, &EXAMPLE_BOOL_FLAG);
@@ -147,7 +147,7 @@ static void test_help_bool_and_string_flags() {
   free_cli_app(app);
 }
 
-static void test_help_bool_string_and_strings_flags() {
+static void test_help_bool_string_and_strings_flags(void) {
   cli_app_state_t *app = new_cli_app(&(cli_app_meta_t){0});
 
   cli_app_add_flag(app, &EXAMPLE_BOOL_FLAG);
@@ -169,7 +169,7 @@ static void test_help_bool_string_and_strings_flags() {
   free_cli_app(app);
 }
 
-static void test_help_with_custom_flags() {
+static void test_help_with_custom_flags(void) {
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
   cli_app_add_flag(app, &EXAMPLE_BOOL_FLAG);
@@ -190,7 +190,7 @@ static void test_help_with_custom_flags() {
   char *help = cli_app_help(app);
 
   assert_string_equal(
-      "testapp 1.0.0\n\n"
+      "testapp version 1.0.0\n\n"
       "A test CLI application\n\n"
       "Usage: testapp [options]\n\n"
       "Options:\n"
@@ -209,7 +209,7 @@ static void test_help_with_custom_flags() {
   free_cli_app(app);
 }
 
-static void test_cli_app_parse_args_common() {
+static void test_cli_app_parse_args_common(void) {
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
   const cli_flag_state_t *bool_flag = cli_app_add_flag(app, &EXAMPLE_BOOL_FLAG);
@@ -256,7 +256,7 @@ static void test_cli_app_parse_args_common() {
   free_cli_app(app);
 }
 
-static void test_cli_app_parse_args_flags_with_equals_sign_long_form() {
+static void test_cli_app_parse_args_flags_with_equals_sign_long_form(void) {
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
   const cli_flag_state_t *bool_flag = cli_app_add_flag(app, &EXAMPLE_BOOL_FLAG);
@@ -300,7 +300,7 @@ static void test_cli_app_parse_args_flags_with_equals_sign_long_form() {
   free_cli_app(app);
 }
 
-static void test_cli_app_parse_args_flags_with_equals_sign_short_form() {
+static void test_cli_app_parse_args_flags_with_equals_sign_short_form(void) {
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
   const cli_flag_state_t *bool_flag = cli_app_add_flag(app, &EXAMPLE_BOOL_FLAG);
@@ -344,7 +344,7 @@ static void test_cli_app_parse_args_flags_with_equals_sign_short_form() {
   free_cli_app(app);
 }
 
-static void test_cli_app_parse_args_double_dash() {
+static void test_cli_app_parse_args_double_dash(void) {
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
   const cli_flag_state_t *bool_flag = cli_app_add_flag(app, &EXAMPLE_BOOL_FLAG);
@@ -389,7 +389,7 @@ static void test_cli_app_parse_args_double_dash() {
   free_cli_app(app);
 }
 
-static void test_cli_app_parse_args_defaults() {
+static void test_cli_app_parse_args_defaults(void) {
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
   const cli_flag_state_t *bool_flag = cli_app_add_flag(app, &EXAMPLE_BOOL_FLAG);
@@ -426,7 +426,7 @@ static void test_cli_app_parse_args_defaults() {
   free_cli_app(app);
 }
 
-static void test_cli_app_parse_args_empty() {
+static void test_cli_app_parse_args_empty(void) {
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
   const cli_flag_state_t *bool_flag = cli_app_add_flag(app, &EXAMPLE_BOOL_FLAG);
@@ -462,7 +462,7 @@ static void test_cli_app_parse_args_empty() {
   free_cli_app(app);
 }
 
-static void test_cli_app_parse_args_env_vars() {
+static void test_cli_app_parse_args_env_vars(void) {
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
   const cli_flag_state_t *bool_flag = cli_app_add_flag(app, &EXAMPLE_BOOL_FLAG);
@@ -473,7 +473,7 @@ static void test_cli_app_parse_args_env_vars() {
 
   // set environment values
   setenv(EXAMPLE_BOOL_FLAG.env_variable, "true", 1);
-  setenv(EXAMPLE_STRING_FLAG.env_variable, "env_value", 1);
+  setenv(EXAMPLE_STRING_FLAG.env_variable, "   env_value \t\t        ", 1);
   setenv(EXAMPLE_STRINGS_FLAG.env_variable, "env1,env2", 1);
 
   const char *argv[] = {NULL};
@@ -506,20 +506,29 @@ static void test_cli_app_parse_args_env_vars() {
   free_cli_app(app);
 }
 
-static void test_cli_app_parse_args_double_run() {
+static void test_cli_app_parse_args_double_run(void) {
+  const cli_flag_meta_t custom_bool_flag_meta = {
+    .short_name = "q",
+    .long_name = "qqq",
+    .description = "A custom boolean flag",
+    .env_variable = "BLA_BLA",
+    .type = FLAG_TYPE_BOOL,
+};
+
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
   cli_flag_state_t *bool_flag = cli_app_add_flag(app, &EXAMPLE_BOOL_FLAG);
   cli_flag_state_t *string_flag = cli_app_add_flag(app, &EXAMPLE_STRING_FLAG);
+  cli_app_add_flag(app, &custom_bool_flag_meta);
 
   // set environment values
   setenv("FOO_1", "true", 1);
   setenv("FOO_2", "env_value", 1);
 
-  const char *argv[] = {NULL};
+  const char *argv[] = {"-q"};
 
   { // first run - should not pick up env vars yet
-    cli_args_parsing_result_t *res = cli_app_parse_args(app, argv, 0);
+    cli_args_parsing_result_t *res = cli_app_parse_args(app, argv, 1);
 
     assert(res->code == FLAGS_PARSING_OK);
     assert(res->message == NULL);
@@ -537,7 +546,7 @@ static void test_cli_app_parse_args_double_run() {
     bool_flag->env_variable = strdup("FOO_1");   // <-- change env variable name
     string_flag->env_variable = strdup("FOO_2"); // <-- change env variable name
 
-    cli_args_parsing_result_t *res = cli_app_parse_args(app, argv, 0);
+    cli_args_parsing_result_t *res = cli_app_parse_args(app, argv, 1);
 
     assert(res->code == FLAGS_PARSING_OK);
     assert(res->message == NULL);
@@ -557,7 +566,7 @@ static void test_cli_app_parse_args_double_run() {
   free_cli_app(app);
 }
 
-static void test_cli_app_parse_args_errors() {
+static void test_cli_app_parse_args_errors(void) {
   { // negative argc
     cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 

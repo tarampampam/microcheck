@@ -6,17 +6,15 @@
  * Returns exit code 0 if process exists, 1 otherwise.
  */
 
+#include "../lib/cli/cli.h"
 #include "version.h"
 #include <ctype.h>
 #include <errno.h>
-#include <limits.h>
 #include <signal.h>
 #include <stdbool.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
 #include <unistd.h>
 
 #define APP_NAME "pidcheck"
@@ -25,75 +23,110 @@
 #define EXIT_SUCCESS_CODE 0
 #define EXIT_FAILURE_CODE 1
 
-/* Default configuration values */
-#define DEFAULT_PIDFILE_ENV "CHECK_PIDFILE"
-#define DEFAULT_PID_ENV "CHECK_PID"
-
 /* PID validation limits */
 #define MIN_PID 1
 #define MAX_PID 4194304 /* typical Linux maximum PID value */
 
 /* Maximum path length (standard POSIX PATH_MAX or reasonable default) */
-#ifndef PATH_MAX
-#define PATH_MAX 4096
+#ifndef MAX_PATH_LEN
+#define MAX_PATH_LEN 4096
 #endif
-#define MAX_PATH_LEN PATH_MAX
+
+#define FLAG_PID_FILE_SHORT "f"
+#define FLAG_PID_FILE_LONG "file"
+#define FLAG_PID_FILE_ENV "CHECK_PIDFILE"
+#define FLAG_PID_FILE_ENV_LONG "file-env"
+#define FLAG_PROC_PID_SHORT "p"
+#define FLAG_PROC_PID_LONG "pid"
+#define FLAG_PROC_PID_ENV "CHECK_PID"
+#define FLAG_PROC_PID_ENV_LONG "pid-env"
+
+static const cli_app_meta_t APP_META = {
+    .name = APP_NAME,
+    .version = APP_VERSION,
+    .description =
+        "Lightweight PID file check utility for Docker containers.\n"
+        "Reads a PID from file or command line and verifies the process is "
+        "running.\n"
+        "Returns exit code 0 if process exists, 1 otherwise.",
+    .usage = "[OPTIONS]",
+    .examples =
+        "  # Check if process from PID file is running\n"
+        "  " APP_NAME " --" FLAG_PID_FILE_LONG " /var/run/app.pid\n\n"
+
+        "  # Check specific PID directly\n"
+        "  " APP_NAME " --" FLAG_PROC_PID_LONG " 1234\n\n"
+
+        "  # Using environment variables\n"
+        "  " FLAG_PID_FILE_ENV "=/var/run/nginx.pid " APP_NAME "\n"
+        "  " FLAG_PROC_PID_ENV "=1234 " APP_NAME "\n\n"
+
+        "  # Override PID file path from environment\n"
+        "  APP_PIDFILE=/run/app.pid " APP_NAME " --" FLAG_PID_FILE_ENV_LONG
+        " APP_PIDFILE\n\n"
+
+        "  # Override PID from custom environment variable\n"
+        "  MY_PID=5678 " APP_NAME " --" FLAG_PROC_PID_ENV_LONG " MY_PID\n"};
+
+static const cli_flag_meta_t PID_FILE_FLAG_META = {
+    .short_name = FLAG_PID_FILE_SHORT,
+    .long_name = FLAG_PID_FILE_LONG,
+    .description = "Path to PID file",
+    .env_variable = FLAG_PID_FILE_ENV,
+    .type = FLAG_TYPE_STRING,
+};
+
+static const cli_flag_meta_t PID_FILE_ENV_FLAG_META = {
+    .long_name = FLAG_PID_FILE_ENV_LONG,
+    .description = "Change env variable name for --" FLAG_PID_FILE_LONG,
+    .env_variable = NULL, // not applicable
+    .type = FLAG_TYPE_STRING,
+};
+
+static const cli_flag_meta_t PROCESS_PID_FLAG_META = {
+    .short_name = FLAG_PROC_PID_SHORT,
+    .long_name = FLAG_PROC_PID_LONG,
+    .description = "Process ID to check",
+    .env_variable = FLAG_PROC_PID_ENV,
+    .type = FLAG_TYPE_STRING,
+};
+
+static const cli_flag_meta_t PROCESS_PID_ENV_FLAG_META = {
+    .long_name = FLAG_PROC_PID_ENV_LONG,
+    .description = "Change env variable name for --" FLAG_PROC_PID_LONG,
+    .env_variable = NULL, // not applicable
+    .type = FLAG_TYPE_STRING,
+};
+
+static const char *err_allocation_failed = "Error: memory allocation failed\n";
+static const char *err_unknown_parsing_error =
+    "Error: unknown error parsing flags\n";
+static const char *err_neither_pid_nor_file =
+    "Error: either PID or PID file path is required\n"
+    "  Use --" FLAG_PID_FILE_LONG
+    " to specify PID file path, or --" FLAG_PROC_PID_LONG " for PID directly\n";
+static const char *err_both_pid_and_file =
+    "Error: --" FLAG_PID_FILE_LONG " and --" FLAG_PROC_PID_LONG
+    " cannot be used together\n";
+static const char *err_interrupted = "Error: operation interrupted by signal\n";
+static const char *err_failed_to_read_pid_file =
+    "Error: failed to read PID from file\n";
+static const char *err_invalid_pid_format = "Error: invalid PID format\n";
+static const char *err_pid_cannot_be_empty = "Error: PID cannot be empty\n";
+static const char *err_pid_file_path_cannot_be_empty =
+    "Error: PID file path cannot be empty\n";
+static const char *err_too_long_pid_file_path =
+    "Error: PID file path is too long\n";
 
 /* Global flag for signal handling - volatile ensures visibility across signal
  * handler */
 static volatile sig_atomic_t interrupted = 0;
 
 /**
- * Configuration structure holding all runtime parameters.
- */
-typedef struct {
-  const char *pidfile;     /* Path to PID file */
-  const char *pidfile_env; /* Environment variable name for PID file path */
-  const char *pid_str;     /* PID as string (from command line or env) */
-  const char *pid_env;     /* Environment variable name for PID */
-  bool pid_provided;       /* Flag indicating if PID was explicitly provided */
-} config_t;
-
-/**
- * Command-line option definition.
- * Used for consistent parsing and help generation.
- */
-typedef struct {
-  const char *short_flag;  /* Short option (e.g., "-f") */
-  const char *long_flag;   /* Long option (e.g., "--file") */
-  const char *description; /* Help text description */
-} option_def_t;
-
-/**
- * Environment variable override option definition.
- * Used for *-env flags that change environment variable names.
- */
-typedef struct {
-  const char *long_flag;          /* Long option (e.g., "--file-env") */
-  const char *description_prefix; /* Description prefix */
-  const option_def_t *parent_opt; /* Parent option this env flag controls */
-  const char *default_env_name;   /* Default environment variable name */
-} env_option_def_t;
-
-/* Option definitions - single source of truth */
-static const option_def_t OPT_HELP = {"-h", "--help", "Show this help message"};
-static const option_def_t OPT_FILE = {"-f", "--file",
-                                      "Path to PID file (env: CHECK_PIDFILE)"};
-static const option_def_t OPT_PID = {"-p", "--pid",
-                                     "Process ID to check (env: CHECK_PID)"};
-
-/* Environment variable override options - reference parent options */
-static const env_option_def_t OPT_FILE_ENV = {"--file-env",
-                                              "Change env variable name for",
-                                              &OPT_FILE, DEFAULT_PIDFILE_ENV};
-static const env_option_def_t OPT_PID_ENV = {
-    "--pid-env", "Change env variable name for", &OPT_PID, DEFAULT_PID_ENV};
-
-/**
  * Signal handler for SIGINT and SIGTERM.
  * Sets a flag to allow graceful shutdown.
  */
-static void signal_handler(int signum) {
+static void signal_handler(const int signum) {
   (void)signum; // unused parameter
   interrupted = 1;
 }
@@ -105,6 +138,7 @@ static void signal_handler(int signum) {
 static bool setup_signal_handlers(void) {
   struct sigaction sa;
   memset(&sa, 0, sizeof(sa));
+
   sa.sa_handler = signal_handler;
   sigemptyset(&sa.sa_mask);
   sa.sa_flags = 0; // no SA_RESTART - we want EINTR on blocking calls
@@ -124,111 +158,6 @@ static bool setup_signal_handlers(void) {
   }
 
   return true;
-}
-
-/**
- * Print usage information and available options.
- * Called with -h/--help flag.
- */
-static void print_help(void) {
-  fprintf(stderr, "%s version %s\n\n", APP_NAME, APP_VERSION);
-  fprintf(stderr,
-          "Lightweight PID file check utility for Docker containers.\n");
-  fprintf(stderr, "Reads a PID from file or command line and verifies the "
-                  "process is running.\n");
-  fprintf(stderr, "Returns exit code 0 if process exists, 1 otherwise.\n\n");
-
-  fprintf(stderr, "Usage:\n");
-  fprintf(stderr, "  %s [OPTIONS]\n\n", APP_NAME);
-  fprintf(stderr, "Options:\n");
-
-  // help option
-  fprintf(stderr, "  %s, %-20s %s\n", OPT_HELP.short_flag, OPT_HELP.long_flag,
-          OPT_HELP.description);
-
-  // file options
-  fprintf(stderr, "  %s, %-20s %s\n", OPT_FILE.short_flag, OPT_FILE.long_flag,
-          OPT_FILE.description);
-  fprintf(stderr, "      %-20s %s %s (current: %s)\n", OPT_FILE_ENV.long_flag,
-          OPT_FILE_ENV.description_prefix, OPT_FILE_ENV.parent_opt->long_flag,
-          OPT_FILE_ENV.default_env_name);
-
-  // pid options
-  fprintf(stderr, "  %s, %-20s %s\n", OPT_PID.short_flag, OPT_PID.long_flag,
-          OPT_PID.description);
-  fprintf(stderr, "      %-20s %s %s (current: %s)\n", OPT_PID_ENV.long_flag,
-          OPT_PID_ENV.description_prefix, OPT_PID_ENV.parent_opt->long_flag,
-          OPT_PID_ENV.default_env_name);
-
-  fprintf(stderr, "\nExamples:\n");
-  fprintf(stderr, "  # Check if process from PID file is running\n");
-  fprintf(stderr, "  %s --file /var/run/app.pid\n\n", APP_NAME);
-
-  fprintf(stderr, "  # Check specific PID directly\n");
-  fprintf(stderr, "  %s --pid 1234\n\n", APP_NAME);
-
-  fprintf(stderr, "  # Using environment variables\n");
-  fprintf(stderr, "  CHECK_PIDFILE=/var/run/nginx.pid %s\n", APP_NAME);
-  fprintf(stderr, "  CHECK_PID=1234 %s\n\n", APP_NAME);
-
-  fprintf(stderr, "  # Override PID file path from environment (useful in "
-                  "Docker)\n");
-  fprintf(stderr, "  APP_PIDFILE=/run/app.pid %s --file-env APP_PIDFILE\n\n",
-          APP_NAME);
-
-  fprintf(stderr, "  # Override PID from custom environment variable\n");
-  fprintf(stderr, "  MY_PID=5678 %s --pid-env MY_PID\n", APP_NAME);
-}
-
-/**
- * Check if argument matches given option definition.
- * Handles both short and long forms.
- */
-static bool matches_option(const char *arg, const option_def_t *opt) {
-  if (arg == NULL || opt == NULL) {
-    return false;
-  }
-
-  if (opt->short_flag != NULL && strcmp(arg, opt->short_flag) == 0) {
-    return true;
-  }
-
-  if (opt->long_flag != NULL && strcmp(arg, opt->long_flag) == 0) {
-    return true;
-  }
-
-  return false;
-}
-
-/**
- * Check if argument matches environment variable option.
- */
-static bool matches_env_option(const char *arg, const env_option_def_t *opt) {
-  if (arg == NULL || opt == NULL || opt->long_flag == NULL) {
-    return false;
-  }
-
-  return strcmp(arg, opt->long_flag) == 0;
-}
-
-/**
- * Extract value from --option=value format.
- * Returns true if format matches and sets value pointer.
- */
-static bool extract_equals_value(const char *arg, const char *prefix,
-                                 const char **value) {
-  if (arg == NULL || prefix == NULL || value == NULL) {
-    return false;
-  }
-
-  size_t prefix_len = strlen(prefix);
-  if (strncmp(arg, prefix, prefix_len) == 0) {
-    *value = arg + prefix_len;
-
-    return true;
-  }
-
-  return false;
 }
 
 /**
@@ -287,12 +216,6 @@ static bool validate_and_convert_pid(const char *str, pid_t *pid) {
   if (val < MIN_PID || val > MAX_PID) {
     fprintf(stderr, "Error: PID %ld is outside valid range (%d-%d)\n", val,
             MIN_PID, MAX_PID);
-    return false;
-  }
-
-  // additional check: ensure value fits in pid_t
-  if (val > (long)INT_MAX) {
-    fprintf(stderr, "Error: PID %ld exceeds maximum pid_t value\n", val);
     return false;
   }
 
@@ -392,193 +315,190 @@ static bool check_process_exists(pid_t pid) {
 /**
  * Main entry point.
  */
-int main(int argc, char *argv[]) {
+int main(const int argc, const char *argv[]) {
   // setup signal handlers
   if (!setup_signal_handlers()) {
     return EXIT_FAILURE_CODE;
   }
 
-  // initialize configuration with defaults
-  config_t config = {
-      .pidfile = NULL,
-      .pidfile_env = DEFAULT_PIDFILE_ENV,
-      .pid_str = NULL,
-      .pid_env = DEFAULT_PID_ENV,
-      .pid_provided = false,
-  };
+  int exit_code = EXIT_FAILURE_CODE;
 
-  // parse command-line arguments
-  for (int i = 1; i < argc; i++) {
-    const char *arg = argv[i];
-    const char *value;
+  // initialize variables, that need to be cleaned up on exit
+  cli_app_state_t *app = NULL;
+  cli_args_parsing_result_t *parsing_result = NULL;
+  char *pid_file = NULL;
+  char *proc_pid = NULL;
 
-    if (matches_option(arg, &OPT_HELP)) {
-      print_help();
+  // create CLI app instance
+  app = new_cli_app(&APP_META);
 
-      return EXIT_SUCCESS_CODE;
-    } else if (matches_option(arg, &OPT_FILE)) {
-      if (i + 1 >= argc) {
-        fprintf(stderr, "Error: %s requires an argument\n", arg);
+  // add flags
+  const cli_flag_state_t *help_flag =
+      cli_app_add_flag(app, &CLI_HELP_FLAG_META);
+  cli_flag_state_t *pidfile_flag = cli_app_add_flag(app, &PID_FILE_FLAG_META);
+  const cli_flag_state_t *pidfile_env_flag =
+      cli_app_add_flag(app, &PID_FILE_ENV_FLAG_META);
+  cli_flag_state_t *proc_pid_flag =
+      cli_app_add_flag(app, &PROCESS_PID_FLAG_META);
+  const cli_flag_state_t *proc_pid_env_flag =
+      cli_app_add_flag(app, &PROCESS_PID_ENV_FLAG_META);
 
-        return EXIT_FAILURE_CODE;
+  // skip argv[0] by moving the pointer and decreasing argc
+  const char **args = argv + 1;
+  const int argn = (argc > 0) ? argc - 1 : 0;
+
+  // first parse to get possible env variable name overrides
+  parsing_result = cli_app_parse_args(app, args, argn);
+
+  // check for parsing errors
+  if (parsing_result->code != FLAGS_PARSING_OK) {
+    fputs("Error: ", stderr);
+    fputs(parsing_result->message ? parsing_result->message
+                                  : err_unknown_parsing_error,
+          stderr);
+    fputc('\n', stderr);
+
+    goto cleanup;
+  }
+
+  bool need_reparse = false;
+
+  // override pidfile flag env variable if specified
+  if (pidfile_env_flag->value_source != FLAG_VALUE_SOURCE_DEFAULT) {
+    if (cli_validate_env_name(pidfile_env_flag->value.string_value)) {
+      pidfile_flag->env_variable = strdup(pidfile_env_flag->value.string_value);
+      if (pidfile_flag->env_variable == NULL) {
+        fputs(err_allocation_failed, stderr);
+
+        goto cleanup;
       }
-      config.pidfile = argv[++i];
-      if (*config.pidfile == '\0') {
-        fprintf(stderr, "Error: PID file path cannot be empty\n");
 
-        return EXIT_FAILURE_CODE;
-      }
-      if (strlen(config.pidfile) >= MAX_PATH_LEN) {
-        fprintf(stderr,
-                "Error: PID file path is too long (max %d characters)\n",
-                MAX_PATH_LEN - 1);
-
-        return EXIT_FAILURE_CODE;
-      }
-    } else if (extract_equals_value(arg, "--file-env=", &value)) {
-      if (value == NULL || *value == '\0') {
-        fprintf(stderr, "Error: --file-env value cannot be empty\n");
-
-        return EXIT_FAILURE_CODE;
-      }
-      config.pidfile_env = value;
-    } else if (matches_env_option(arg, &OPT_FILE_ENV)) {
-      if (i + 1 >= argc) {
-        fprintf(stderr, "Error: %s requires an argument\n", arg);
-
-        return EXIT_FAILURE_CODE;
-      }
-      config.pidfile_env = argv[++i];
-      if (*config.pidfile_env == '\0') {
-        fprintf(stderr, "Error: environment variable name cannot be empty\n");
-
-        return EXIT_FAILURE_CODE;
-      }
-    } else if (matches_option(arg, &OPT_PID)) {
-      if (i + 1 >= argc) {
-        fprintf(stderr, "Error: %s requires an argument\n", arg);
-
-        return EXIT_FAILURE_CODE;
-      }
-      config.pid_str = argv[++i];
-      if (*config.pid_str == '\0') {
-        fprintf(stderr, "Error: PID cannot be empty\n");
-
-        return EXIT_FAILURE_CODE;
-      }
-      config.pid_provided = true;
-    } else if (extract_equals_value(arg, "--pid-env=", &value)) {
-      if (value == NULL || *value == '\0') {
-        fprintf(stderr, "Error: --pid-env value cannot be empty\n");
-
-        return EXIT_FAILURE_CODE;
-      }
-      config.pid_env = value;
-    } else if (matches_env_option(arg, &OPT_PID_ENV)) {
-      if (i + 1 >= argc) {
-        fprintf(stderr, "Error: %s requires an argument\n", arg);
-
-        return EXIT_FAILURE_CODE;
-      }
-      config.pid_env = argv[++i];
-      if (*config.pid_env == '\0') {
-        fprintf(stderr, "Error: environment variable name cannot be empty\n");
-
-        return EXIT_FAILURE_CODE;
-      }
-    } else {
-      fprintf(stderr, "Error: unknown option: %s\n", arg);
-      fprintf(stderr, "Try '%s --help' for usage information\n", APP_NAME);
-
-      return EXIT_FAILURE_CODE;
+      need_reparse = true;
     }
+  }
+
+  // override proc pid flag env variable if specified
+  if (proc_pid_env_flag->value_source != FLAG_VALUE_SOURCE_DEFAULT) {
+    if (cli_validate_env_name(proc_pid_env_flag->value.string_value)) {
+      proc_pid_flag->env_variable =
+          strdup(proc_pid_env_flag->value.string_value);
+      if (proc_pid_flag->env_variable == NULL) {
+        fputs(err_allocation_failed, stderr);
+
+        goto cleanup;
+      }
+
+      need_reparse = true;
+    }
+  }
+
+  // and reparse args to apply the env variable name changes
+  if (need_reparse) {
+    free_cli_args_parsing_result(parsing_result);
+    parsing_result = cli_app_parse_args(app, args, argn);
+
+    // check for parsing errors again
+    if (parsing_result->code != FLAGS_PARSING_OK) {
+      fputs("Error: ", stderr);
+      fputs(parsing_result->message ? parsing_result->message
+                                    : err_unknown_parsing_error,
+            stderr);
+      fputc('\n', stderr);
+
+      goto cleanup;
+    }
+  }
+
+  // show help if requested and exit
+  if (help_flag->value.bool_value) {
+    const char *help_text = cli_app_help(app);
+    if (!help_text) {
+      goto cleanup;
+    }
+
+    fputs(help_text, stderr);
+    exit_code = EXIT_SUCCESS_CODE;
+
+    goto cleanup;
+  }
+
+  // read final flag values
+  pid_file = pidfile_flag->value.string_value
+                 ? strdup(pidfile_flag->value.string_value)
+                 : NULL;
+  proc_pid = proc_pid_flag->value.string_value
+                 ? strdup(proc_pid_flag->value.string_value)
+                 : NULL;
+
+  // if NEITHER pid file NOR proc pid provided, error out
+  if (!pid_file && !proc_pid) {
+    fputs(err_neither_pid_nor_file, stderr);
+
+    goto cleanup;
+  }
+
+  // the same if BOTH pid file and proc pid provided
+  if (pid_file && proc_pid) {
+    fputs(err_both_pid_and_file, stderr);
+
+    goto cleanup;
   }
 
   // check for interruption
   if (interrupted) {
-    fprintf(stderr, "Error: operation interrupted by signal\n");
+    fputs(err_interrupted, stderr);
 
-    return EXIT_FAILURE_CODE;
+    goto cleanup;
   }
 
-  // check for conflicting options
-  if (config.pidfile != NULL && config.pid_provided) {
-    fprintf(stderr, "Error: --file and --pid cannot be used together\n");
-    fprintf(stderr, "Try '%s --help' for usage information\n", APP_NAME);
+  pid_t pid_to_check = 0;
 
-    return EXIT_FAILURE_CODE;
-  }
+  if (pid_file) {
+    const size_t pid_file_len = strlen(pid_file);
+    if (pid_file_len == 0) {
+      fputs(err_pid_file_path_cannot_be_empty, stderr);
 
-  // resolve PID from environment if not explicitly provided via --pid
-  if (!config.pid_provided && config.pid_str == NULL) {
-    if (config.pid_env == NULL || *config.pid_env == '\0') {
-      fprintf(stderr, "Error: PID environment variable name is empty\n");
-
-      return EXIT_FAILURE_CODE;
+      goto cleanup;
     }
-    const char *env_pid = getenv(config.pid_env);
-    if (env_pid != NULL && *env_pid != '\0') {
-      config.pid_str = env_pid;
-      config.pid_provided = true;
+
+    if (pid_file_len >= MAX_PATH_LEN) {
+      fputs(err_too_long_pid_file_path, stderr);
+
+      goto cleanup;
     }
-  }
 
-  // resolve PID file path from environment if not explicitly set
-  if (config.pidfile == NULL && !config.pid_provided) {
-    if (config.pidfile_env == NULL || *config.pidfile_env == '\0') {
-      fprintf(stderr, "Error: environment variable name is empty\n");
+    // read PID from file
+    if (!read_pid_from_file(pid_file, &pid_to_check)) {
+      fputs(err_failed_to_read_pid_file, stderr);
 
-      return EXIT_FAILURE_CODE;
-    }
-    const char *env_pidfile = getenv(config.pidfile_env);
-    if (env_pidfile != NULL && *env_pidfile != '\0') {
-      if (strlen(env_pidfile) >= MAX_PATH_LEN) {
-        fprintf(stderr,
-                "Error: PID file path from environment is too long (max %d "
-                "characters)\n",
-                MAX_PATH_LEN - 1);
-
-        return EXIT_FAILURE_CODE;
-      }
-      config.pidfile = env_pidfile;
-    }
-  }
-
-  // validate that either PID or PID file was provided
-  if (config.pidfile == NULL && !config.pid_provided) {
-    fprintf(stderr, "Error: either PID or PID file path is required\n");
-    fprintf(stderr, "  Use --pid to specify PID directly, or --file for PID "
-                    "file path\n");
-    fprintf(stderr, "  Alternatively, set %s or %s environment variable\n",
-            config.pid_env, config.pidfile_env);
-    fprintf(stderr, "Try '%s --help' for usage information\n", APP_NAME);
-
-    return EXIT_FAILURE_CODE;
-  }
-
-  // get the PID (either from direct input or from file)
-  pid_t pid;
-  if (config.pid_provided) {
-    // PID provided directly via --pid or environment
-    if (!validate_and_convert_pid(config.pid_str, &pid)) {
-      fprintf(stderr, "Error: invalid PID format: '%s'\n", config.pid_str);
-
-      return EXIT_FAILURE_CODE;
+      goto cleanup;
     }
   } else {
-    // read PID from file
-    if (!read_pid_from_file(config.pidfile, &pid)) {
-      return EXIT_FAILURE_CODE;
+    if (strlen(proc_pid) == 0) {
+      fputs(err_pid_cannot_be_empty, stderr);
+
+      goto cleanup;
+    }
+
+    // validate and convert provided PID string
+    if (!validate_and_convert_pid(proc_pid, &pid_to_check)) {
+      fputs(err_invalid_pid_format, stderr);
+      fputs(": '", stderr);
+      fputs(proc_pid, stderr);
+      fputs("'\n", stderr);
+
+      goto cleanup;
     }
   }
 
-  // check for interruption
-  if (interrupted) {
-    fprintf(stderr, "Error: operation interrupted by signal\n");
+  exit_code = check_process_exists(pid_to_check) ? EXIT_SUCCESS_CODE
+                                                 : EXIT_FAILURE_CODE;
 
-    return EXIT_FAILURE_CODE;
-  }
+cleanup:
+  free_cli_args_parsing_result(parsing_result);
+  free_cli_app(app);
+  free(pid_file);
+  free(proc_pid);
 
-  // check if process exists
-  return check_process_exists(pid) ? EXIT_SUCCESS_CODE : EXIT_FAILURE_CODE;
+  return exit_code;
 }

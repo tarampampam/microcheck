@@ -601,28 +601,28 @@ def get_test_cases() -> List[TestCase]:
             name="Missing: --file without argument",
             give_args=["--file"],
             want_exit_code=1,
-            want_stderr_contains="requires an argument",
+            want_stderr_contains="missing value for flag --file",
         ),
 
         TestCase(
             name="Missing: --pid without argument",
             give_args=["--pid"],
             want_exit_code=1,
-            want_stderr_contains="requires an argument",
+            want_stderr_contains="missing value for flag --pid",
         ),
 
         TestCase(
             name="Missing: --file-env without argument",
             give_args=["--file-env"],
             want_exit_code=1,
-            want_stderr_contains="requires an argument",
+            want_stderr_contains="missing value for flag --file-env",
         ),
 
         TestCase(
             name="Missing: --pid-env without argument",
             give_args=["--pid-env"],
             want_exit_code=1,
-            want_stderr_contains="requires an argument",
+            want_stderr_contains="missing value for flag --pid-env",
         ),
 
         # Empty values
@@ -631,14 +631,14 @@ def get_test_cases() -> List[TestCase]:
             name="Empty: --file-env with empty value",
             give_args=["--file-env="],
             want_exit_code=1,
-            want_stderr_contains="cannot be empty",
+            want_stderr_contains="missing value for flag --file-env",
         ),
 
         TestCase(
             name="Empty: --pid-env with empty value",
             give_args=["--pid-env="],
             want_exit_code=1,
-            want_stderr_contains="cannot be empty",
+            want_stderr_contains="missing value for flag --pid-env",
         ),
 
         TestCase(
@@ -654,14 +654,14 @@ def get_test_cases() -> List[TestCase]:
             name="Unknown: Invalid option rejected",
             give_args=["--invalid-option"],
             want_exit_code=1,
-            want_stderr_contains="unknown option",
+            want_stderr_contains="unknown flag",
         ),
 
         TestCase(
             name="Unknown: Invalid short option rejected",
             give_args=["-x"],
             want_exit_code=1,
-            want_stderr_contains="unknown option",
+            want_stderr_contains="unknown flag",
         ),
 
         # Environment variable edge cases
@@ -686,8 +686,7 @@ def get_test_cases() -> List[TestCase]:
             give_args=[],
             give_env={"CHECK_PID": "   ", "CHECK_PIDFILE": "{PIDFILE}"},
             give_pidfile_content="1",
-            want_exit_code=1,
-            want_stderr_contains="invalid PID format",
+            want_exit_code=0,
         ),
 
         # Real process lifecycle
@@ -787,7 +786,7 @@ def get_test_cases() -> List[TestCase]:
             name="Security: Very long env var name",
             give_args=["--pid-env", "A" * 1000],
             give_env={"A" * 1000: "1"},
-            want_exit_code=0,
+            want_exit_code=1,
         ),
 
         # Special characters in paths

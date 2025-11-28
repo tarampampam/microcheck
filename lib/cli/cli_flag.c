@@ -5,6 +5,16 @@
 #include <string.h>
 
 /**
+ * Predefined help flag metadata.
+ */
+const cli_flag_meta_t CLI_HELP_FLAG_META = {
+  .short_name = "h",
+  .long_name = "help",
+  .description = "Show this help message",
+  .type = FLAG_TYPE_BOOL,
+};
+
+/**
  * Free dynamically allocated memory inside a cli_flag_state_t.
  */
 void cli_internal_free_flag_state(cli_flag_state_t *fs) {

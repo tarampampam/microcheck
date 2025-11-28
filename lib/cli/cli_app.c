@@ -2,9 +2,7 @@
 #include "cli_flag.h"
 
 #include <ctype.h>
-#include <stdarg.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -104,7 +102,7 @@ cli_flag_state_t *cli_app_add_flag(cli_app_state_t *app,
 /**
  * Validate environment variable name according to common POSIX rules.
  */
-static bool validate_env_name(const char *name) {
+bool cli_validate_env_name(const char *name) {
   if (!name || !*name) {
     return false;
   }
@@ -201,6 +199,43 @@ static bool_parsing_result_t parse_bool_value(const char *value) {
 }
 
 /**
+ * Trim leading and trailing whitespace from a string in place.
+ */
+static void trim_str(char *str) {
+  if (str == NULL || *str == '\0') {
+    return;
+  }
+
+  // find first non-space character
+  const char *start = str;
+  while (*start && isspace((unsigned char)*start)) {
+    start++;
+  }
+
+  // if the string is all spaces
+  if (*start == '\0') {
+    *str = '\0';
+
+    return;
+  }
+
+  // find last non-space character
+  const char *end = str + strlen(str) - 1;
+  while (end > start && isspace((unsigned char)*end)) {
+    end--;
+  }
+
+  // copy trimmed content to the beginning of str
+  const size_t len = (size_t)(end - start + 1);
+  if (start != str) {
+    memmove(str, start, len);
+  }
+
+  // null-terminate the trimmed string
+  str[len] = '\0';
+}
+
+/**
  * Set flag value from environment variable if set.
  */
 static bool set_flag_value_from_env(cli_flag_state_t *fs) {
@@ -209,13 +244,19 @@ static bool set_flag_value_from_env(cli_flag_state_t *fs) {
   }
 
   // validate environment variable name
-  if (!validate_env_name(fs->env_variable)) {
+  if (!cli_validate_env_name(fs->env_variable)) {
     return false;
   }
 
-  const char *env_value = getenv(fs->env_variable);
+  char *env_value = getenv(fs->env_variable);
   if (!env_value) {
     return false; // env variable not set
+  }
+
+  // remove leading/trailing whitespace
+  trim_str(env_value);
+  if (strlen(env_value) == 0) {
+    return false; // empty value after trimming
   }
 
   // validate value for CRLF
@@ -487,9 +528,11 @@ cli_app_parse_args(cli_app_state_t *app, const char *argv[], const int argc) {
     return res;
   }
 
-  // first, set flag values from environment variables
   for (size_t i = 0; i < app->flags.count; i++) {
     if (app->flags.list[i]) {
+      // reset flag value source state
+      app->flags.list[i]->value_source = FLAG_VALUE_SOURCE_DEFAULT;
+      // set flag values from environment and variables
       set_flag_value_from_env(app->flags.list[i]);
     }
   }
