@@ -1,5 +1,3 @@
-// file: cli.c
-
 #include "cli.h"
 #include "cli_flag.h"
 
@@ -153,6 +151,27 @@ typedef struct {
 } bool_parsing_result_t;
 
 /**
+ * Helper for case-insensitive string comparison.
+ */
+static int str_case_cmp(const char *s1, const char *s2) {
+  const unsigned char *us1 = (const unsigned char *)s1;
+  const unsigned char *us2 = (const unsigned char *)s2;
+
+  while (*us1 && *us2) {
+    const int c1 = tolower(*us1);
+    const int c2 = tolower(*us2);
+    if (c1 != c2) {
+      return c1 - c2;
+    }
+
+    us1++;
+    us2++;
+  }
+
+  return tolower(*us1) - tolower(*us2);
+}
+
+/**
  * Parse a boolean value from string.
  */
 static bool_parsing_result_t parse_bool_value(const char *value) {
@@ -162,16 +181,16 @@ static bool_parsing_result_t parse_bool_value(const char *value) {
     return result;
   }
 
-  if (strcmp(value, "1") == 0 || strcasecmp(value, "true") == 0 ||
-      strcasecmp(value, "yes") == 0) {
+  if (strcmp(value, "1") == 0 || str_case_cmp(value, "true") == 0 ||
+      str_case_cmp(value, "yes") == 0) {
     result.value = true;
     result.error = false;
 
     return result;
   }
 
-  if (strcmp(value, "0") == 0 || strcasecmp(value, "false") == 0 ||
-      strcasecmp(value, "no") == 0) {
+  if (strcmp(value, "0") == 0 || str_case_cmp(value, "false") == 0 ||
+      str_case_cmp(value, "no") == 0) {
     result.value = false;
     result.error = false;
 
@@ -251,7 +270,7 @@ typedef struct {
  * Check if flag has a value (contains '=').
  */
 static inline bool flag_search_has_value(const flag_search_result_t *result) {
-  return result && result->value_start > 0 && result->value_len > 0;
+  return result->value_start > 0 && result->value_len > 0;
 }
 
 /**
@@ -259,7 +278,7 @@ static inline bool flag_search_has_value(const flag_search_result_t *result) {
  * Returns NULL if not found or allocation failed.
  */
 static char *flag_search_get_pattern(const flag_search_result_t *result) {
-  if (!result || result->flag == NULL) {
+  if (result->flag == NULL) {
     return NULL;
   }
 
@@ -316,7 +335,7 @@ static flag_search_result_t app_find_flag(const cli_app_state_t *app,
                                  .value_start = 0,
                                  .value_len = 0};
 
-  if (!app || !arg) {
+  if (!arg) {
     return result;
   }
 
@@ -600,9 +619,14 @@ cli_app_parse_args(cli_app_state_t *app, const char *argv[], const int argc) {
         fs->value_source = FLAG_VALUE_SOURCE_CLI;
 
         const bool has_value = flag_search_has_value(&found);
-        char *value = has_value
-                          ? flag_search_get_value(&found)
-                          : ((size_t)argc > i + 1 ? strdup(argv[++i]) : NULL);
+
+        // check for overflow before accessing argv[i+1]
+        char *value = NULL;
+        if (has_value) {
+          value = flag_search_get_value(&found);
+        } else if (i < SIZE_MAX - 1 && i + 1 < (size_t)argc) {
+          value = strdup(argv[++i]);
+        }
 
         // flag has no value OR value allocation failed
         if (!value) {
@@ -654,9 +678,14 @@ cli_app_parse_args(cli_app_state_t *app, const char *argv[], const int argc) {
 
       case FLAG_TYPE_STRINGS: {
         const bool has_value = flag_search_has_value(&found);
-        char *value = has_value
-                          ? flag_search_get_value(&found)
-                          : ((size_t)argc > i + 1 ? strdup(argv[++i]) : NULL);
+
+        // check for overflow before accessing argv[i+1]
+        char *value = NULL;
+        if (has_value) {
+          value = flag_search_get_value(&found);
+        } else if (i < SIZE_MAX - 1 && i + 1 < (size_t)argc) {
+          value = strdup(argv[++i]);
+        }
 
         // flag has no value OR value allocation failed
         if (!value) {

@@ -42,8 +42,8 @@ str_add_f(char **dest, const char *fmt, ...) {
   const size_t add_len_u = (size_t)add_len;
   const size_t curr_len = (*dest != NULL) ? strlen(*dest) : 0;
 
-  // check overflow
-  if (add_len_u > SIZE_MAX - curr_len - 1) {
+  // check overflow: ensure we can safely add curr_len + add_len_u + 1
+  if (add_len_u > SIZE_MAX - 1 || curr_len > SIZE_MAX - add_len_u - 1) {
     va_end(args_copy);
 
     return 0;
@@ -92,6 +92,7 @@ char *cli_app_help(const cli_app_state_t *state) {
   if (!buf) {
     return NULL;
   }
+  buf[0] = '\0'; // Initialize as empty string
 
   // app name and version
   if (!str_add_f(&buf, "%s%s%s", state->meta->name ? state->meta->name : "app",

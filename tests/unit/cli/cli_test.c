@@ -78,7 +78,8 @@ static void test_cli_app_add_flag() {
   const cli_flag_state_t *bool_flag = cli_app_add_flag(app, &EXAMPLE_BOOL_FLAG);
   assert(bool_flag != NULL);
 
-  const cli_flag_state_t *string_flag = cli_app_add_flag(app, &EXAMPLE_STRING_FLAG);
+  const cli_flag_state_t *string_flag =
+      cli_app_add_flag(app, &EXAMPLE_STRING_FLAG);
   assert(string_flag != NULL);
 
   const cli_flag_state_t *strings_flag =
@@ -212,7 +213,8 @@ static void test_cli_app_parse_args_common() {
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
   const cli_flag_state_t *bool_flag = cli_app_add_flag(app, &EXAMPLE_BOOL_FLAG);
-  const cli_flag_state_t *string_flag = cli_app_add_flag(app, &EXAMPLE_STRING_FLAG);
+  const cli_flag_state_t *string_flag =
+      cli_app_add_flag(app, &EXAMPLE_STRING_FLAG);
   const cli_flag_state_t *strings_flag =
       cli_app_add_flag(app, &EXAMPLE_STRINGS_FLAG);
 
@@ -258,7 +260,8 @@ static void test_cli_app_parse_args_flags_with_equals_sign_long_form() {
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
   const cli_flag_state_t *bool_flag = cli_app_add_flag(app, &EXAMPLE_BOOL_FLAG);
-  const cli_flag_state_t *string_flag = cli_app_add_flag(app, &EXAMPLE_STRING_FLAG);
+  const cli_flag_state_t *string_flag =
+      cli_app_add_flag(app, &EXAMPLE_STRING_FLAG);
   const cli_flag_state_t *strings_flag =
       cli_app_add_flag(app, &EXAMPLE_STRINGS_FLAG);
 
@@ -301,12 +304,13 @@ static void test_cli_app_parse_args_flags_with_equals_sign_short_form() {
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
   const cli_flag_state_t *bool_flag = cli_app_add_flag(app, &EXAMPLE_BOOL_FLAG);
-  const cli_flag_state_t *string_flag = cli_app_add_flag(app, &EXAMPLE_STRING_FLAG);
+  const cli_flag_state_t *string_flag =
+      cli_app_add_flag(app, &EXAMPLE_STRING_FLAG);
   const cli_flag_state_t *strings_flag =
       cli_app_add_flag(app, &EXAMPLE_STRINGS_FLAG);
 
   const char *argv[] = {
-      "-b=No",          // bool flag
+      "-b=No",           // bool flag
       "-s=custom value", // string flag with value
       "-m=first",        // strings flag with value 1
       "-m=second",       // strings flag with value 2
@@ -340,11 +344,57 @@ static void test_cli_app_parse_args_flags_with_equals_sign_short_form() {
   free_cli_app(app);
 }
 
+static void test_cli_app_parse_args_double_dash() {
+  cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
+
+  const cli_flag_state_t *bool_flag = cli_app_add_flag(app, &EXAMPLE_BOOL_FLAG);
+  const cli_flag_state_t *string_flag =
+      cli_app_add_flag(app, &EXAMPLE_STRING_FLAG);
+  const cli_flag_state_t *strings_flag =
+      cli_app_add_flag(app, &EXAMPLE_STRINGS_FLAG);
+
+  const char *argv[] = {
+      "-b=YeS",                     // bool flag
+      "--string-flag=custom value", // string flag with value
+      "-m=first",                   // strings flag with value 1
+      "--",                         // end of flags
+      "-m=second",                  // arg 1
+      "positional1",                // arg 2
+      "positional2",                // arg 3
+  };
+
+  cli_args_parsing_result_t *res =
+      cli_app_parse_args(app, argv, sizeof(argv) / sizeof(argv[0]));
+
+  assert(res->code == FLAGS_PARSING_OK);
+  assert(res->message == NULL);
+
+  free_cli_args_parsing_result(res);
+
+  assert(bool_flag->value.bool_value == true);
+  assert(bool_flag->value_source == FLAG_VALUE_SOURCE_CLI);
+
+  assert_string_equal("custom value", string_flag->value.string_value);
+  assert(string_flag->value_source == FLAG_VALUE_SOURCE_CLI);
+
+  assert(strings_flag->value.strings_value.count == 1);
+  assert_string_equal("first", strings_flag->value.strings_value.list[0]);
+  assert(strings_flag->value_source == FLAG_VALUE_SOURCE_CLI);
+
+  assert(app->args.count == 3);
+  assert_string_equal("-m=second", app->args.list[0]);
+  assert_string_equal("positional1", app->args.list[1]);
+  assert_string_equal("positional2", app->args.list[2]);
+
+  free_cli_app(app);
+}
+
 static void test_cli_app_parse_args_defaults() {
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
   const cli_flag_state_t *bool_flag = cli_app_add_flag(app, &EXAMPLE_BOOL_FLAG);
-  const cli_flag_state_t *string_flag = cli_app_add_flag(app, &EXAMPLE_STRING_FLAG);
+  const cli_flag_state_t *string_flag =
+      cli_app_add_flag(app, &EXAMPLE_STRING_FLAG);
   const cli_flag_state_t *strings_flag =
       cli_app_add_flag(app, &EXAMPLE_STRINGS_FLAG);
 
@@ -380,7 +430,8 @@ static void test_cli_app_parse_args_empty() {
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
   const cli_flag_state_t *bool_flag = cli_app_add_flag(app, &EXAMPLE_BOOL_FLAG);
-  const cli_flag_state_t *string_flag = cli_app_add_flag(app, &EXAMPLE_STRING_FLAG);
+  const cli_flag_state_t *string_flag =
+      cli_app_add_flag(app, &EXAMPLE_STRING_FLAG);
   const cli_flag_state_t *strings_flag =
       cli_app_add_flag(app, &EXAMPLE_STRINGS_FLAG);
 
@@ -415,7 +466,8 @@ static void test_cli_app_parse_args_env_vars() {
   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
   const cli_flag_state_t *bool_flag = cli_app_add_flag(app, &EXAMPLE_BOOL_FLAG);
-  const cli_flag_state_t *string_flag = cli_app_add_flag(app, &EXAMPLE_STRING_FLAG);
+  const cli_flag_state_t *string_flag =
+      cli_app_add_flag(app, &EXAMPLE_STRING_FLAG);
   const cli_flag_state_t *strings_flag =
       cli_app_add_flag(app, &EXAMPLE_STRINGS_FLAG);
 
@@ -588,8 +640,9 @@ static void test_cli_app_parse_args_errors() {
         cli_app_parse_args(app, (const char *[]){"--bool-flag=not a bool"}, 1);
 
     assert(res->code == FLAGS_PARSING_INVALID_VALUE);
-    assert_string_equal("invalid value [not a bool] for boolean flag --bool-flag",
-                        res->message);
+    assert_string_equal(
+        "invalid value [not a bool] for boolean flag --bool-flag",
+        res->message);
 
     free_cli_args_parsing_result(res);
     free_cli_app(app);
@@ -751,14 +804,12 @@ static void test_cli_app_parse_args_errors() {
 
     cli_app_add_flag(app, &EXAMPLE_STRING_FLAG);
 
-    cli_args_parsing_result_t *res =
-        cli_app_parse_args(app, (const char
-        *[]){"--string-flag=invalid\r\n\t\n"}, 1);
+    cli_args_parsing_result_t *res = cli_app_parse_args(
+        app, (const char *[]){"--string-flag=invalid\r\n\t\n"}, 1);
 
     assert(res->code == FLAGS_PARSING_INVALID_VALUE);
-    assert_string_equal(
-        "invalid characters in value for flag --string-flag",
-        res->message);
+    assert_string_equal("invalid characters in value for flag --string-flag",
+                        res->message);
 
     free_cli_args_parsing_result(res);
     free_cli_app(app);
@@ -1086,6 +1137,7 @@ int main() {
   test_cli_app_parse_args_common();
   test_cli_app_parse_args_flags_with_equals_sign_long_form();
   test_cli_app_parse_args_flags_with_equals_sign_short_form();
+  test_cli_app_parse_args_double_dash();
   test_cli_app_parse_args_defaults();
   test_cli_app_parse_args_empty();
   test_cli_app_parse_args_env_vars();

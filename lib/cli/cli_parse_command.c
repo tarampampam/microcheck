@@ -1,4 +1,5 @@
 #include "cli.h"
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -22,13 +23,23 @@ void free_cli_command_parsing_result(cli_command_parsing_result_t *result) {
 }
 
 /**
- * Helper to set error code and cleanup temporary buffer.
+ * Helper to set error code and cleanup.
  */
 static cli_command_parsing_result_t *
 set_parse_error(cli_command_parsing_result_t *result, char *temp_buffer,
                 const CliCommandParsingErrorCode code) {
   result->code = code;
-  free(temp_buffer); // TODO: remove this shit from here
+  free(temp_buffer);
+
+  /* Free partially filled argv on error */
+  if (result->argv) {
+    for (int i = 0; i < result->argc; i++) {
+      free(result->argv[i]);
+    }
+
+    free(result->argv);
+    result->argv = NULL;
+  }
 
   return result;
 }
@@ -38,24 +49,29 @@ set_parse_error(cli_command_parsing_result_t *result, char *temp_buffer,
  * Returns true on success, false on allocation failure.
  */
 static bool save_argument(cli_command_parsing_result_t *result,
-                          const char *arg_buffer, const int arg_len) {
+                          const char *arg_buffer, const size_t arg_len) {
   if (result->argc >= COMMAND_PARSE_MAX_ARGS) {
     result->code = COMMAND_PARSING_TOO_MANY_ARGS;
 
     return false;
   }
 
-  if (arg_len < 0 || !result->argv) {
+  if (!result->argv) {
     return false;
   }
 
-  /* Create null-terminated copy */
-  result->argv[result->argc] = malloc((size_t)arg_len + 1);
+  // check for overflow before allocation
+  if (arg_len >= SIZE_MAX) {
+    return false;
+  }
+
+  // create null-terminated copy
+  result->argv[result->argc] = malloc(arg_len + 1);
   if (!result->argv[result->argc]) {
     return false; // allocation failure
   }
 
-  memcpy(result->argv[result->argc], arg_buffer, (size_t)arg_len);
+  memcpy(result->argv[result->argc], arg_buffer, arg_len);
   result->argv[result->argc][arg_len] = '\0';
   result->argc++;
 
@@ -110,7 +126,7 @@ cli_command_parsing_result_t *cli_parse_command_string(const char *str) {
   }
 
   // parser state
-  int arg_len = 0;
+  size_t arg_len = 0;
   const char *p = str;
   bool in_single_quote = false;
   bool in_double_quote = false;
