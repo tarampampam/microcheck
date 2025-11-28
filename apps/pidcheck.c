@@ -6,7 +6,8 @@
  * Returns exit code 0 if process exists, 1 otherwise.
  */
 
-// NOTE for me in the future: do not use `fprintf` to keep result binary small
+// NOTE for me in the future: do not use `fprintf` / `snprintf` and other
+// similar functions to keep result binary small
 
 #include "../lib/cli/cli.h"
 #include "version.h"
@@ -119,8 +120,10 @@ static const cli_flag_meta_t PROCESS_PID_ENV_FLAG_META = {
 #define ERR_PID_FILE_CANNOT_BE_EMPTY "Error: PID file path cannot be empty\n"
 #define ERR_TOO_LONG_PID_FILE_PATH "Error: PID file path is too long\n"
 
-/* Global flag for signal handling - volatile ensures visibility across signal
- * handler */
+/**
+ * Global flag for signal handling - volatile ensures visibility across signal
+ * handler.
+ */
 static volatile sig_atomic_t interrupted = 0;
 
 /**
@@ -317,6 +320,11 @@ int main(const int argc, const char *argv[]) {
 
   // create CLI app instance
   app = new_cli_app(&APP_META);
+  if (app == NULL) {
+    fputs(ERR_ALLOCATION_FAILED, stderr);
+
+    goto cleanup;
+  }
 
   // add flags
   const cli_flag_state_t *help_flag =
@@ -335,6 +343,11 @@ int main(const int argc, const char *argv[]) {
 
   // first parse to get possible env variable name overrides
   parsing_result = cli_app_parse_args(app, args, argn);
+  if (parsing_result == NULL) {
+    fputs(ERR_ALLOCATION_FAILED, stderr);
+
+    goto cleanup;
+  }
 
   // check for parsing errors
   if (parsing_result->code != FLAGS_PARSING_OK) {
@@ -382,6 +395,11 @@ int main(const int argc, const char *argv[]) {
   if (need_reparse) {
     free_cli_args_parsing_result(parsing_result);
     parsing_result = cli_app_parse_args(app, args, argn);
+    if (parsing_result == NULL) {
+      fputs(ERR_ALLOCATION_FAILED, stderr);
+
+      goto cleanup;
+    }
 
     // check for parsing errors again
     if (parsing_result->code != FLAGS_PARSING_OK) {

@@ -74,7 +74,7 @@ build/bin/httpcheck: apps/httpcheck.c apps/version.h
 
 build/bin/portcheck: apps/portcheck.c apps/version.h
 	mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -o $@ $<
+	$(CC) $(CFLAGS) -o $@ $< build/lib/cli.a
 	strip $(STRIP_FLAGS) $@
 
 build/bin/parallel: apps/parallel.c apps/version.h
@@ -102,6 +102,7 @@ test:	build/bin/httpcheck \
 	python3 ./tests/feature/httpcheck.py --bin ./build/bin/httpcheck
 	python3 ./tests/feature/httpcheck.py --bin ./build/bin/httpscheck --https
 	python3 ./tests/feature/httpcheck.py --bin ./build/bin/httpscheck
+	python3 ./tests/feature/portcheck.py --bin ./build/bin/portcheck
 	python3 ./tests/feature/parallel.py --bin ./build/bin/parallel
 	python3 ./tests/feature/pidcheck.py --bin ./build/bin/pidcheck
 

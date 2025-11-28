@@ -5,19 +5,22 @@
  * healthchecks. Returns exit code 0 if port is open/accessible, 1 otherwise.
  */
 
+// NOTE for me in the future: do not use `fprintf` / `snprintf` and other
+// similar functions to keep result binary small
+
+#include "../lib/cli/cli.h"
 #include "version.h"
+
 #include <arpa/inet.h>
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
-#include <netinet/in.h>
 #include <signal.h>
 #include <stdbool.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
 
@@ -27,13 +30,6 @@
 #define EXIT_SUCCESS_CODE 0
 #define EXIT_FAILURE_CODE 1
 
-/* Default configuration values */
-#define DEFAULT_HOST "127.0.0.1"
-#define DEFAULT_HOST_ENV "CHECK_HOST"
-#define DEFAULT_PORT_ENV "CHECK_PORT"
-#define DEFAULT_TIMEOUT 5
-#define DEFAULT_TIMEOUT_ENV "CHECK_TIMEOUT"
-
 /* Timeout limits (1 second to 1 hour) */
 #define MIN_TIMEOUT 1
 #define MAX_TIMEOUT 3600
@@ -42,76 +38,135 @@
 #define MIN_PORT 1
 #define MAX_PORT 65535
 
-/* Protocol types */
-typedef enum { PROTO_TCP = 0, PROTO_UDP = 1 } protocol_t;
+#define FLAG_HELP_SHORT "h"
+#define FLAG_TCP_LONG "tcp"
+#define FLAG_UDP_LONG "udp"
+#define FLAG_HOST_LONG "host"
+#define FLAG_HOST_ENV "CHECK_HOST"
+#define FLAG_HOST_ENV_LONG "host-env"
+#define FLAG_PORT_SHORT "p"
+#define FLAG_PORT_LONG "port"
+#define FLAG_PORT_ENV "CHECK_PORT"
+#define FLAG_PORT_ENV_LONG "port-env"
+#define FLAG_TIMEOUT_SHORT "t"
+#define FLAG_TIMEOUT_LONG "timeout"
+#define FLAG_TIMEOUT_ENV "CHECK_TIMEOUT"
+#define FLAG_TIMEOUT_ENV_LONG "timeout-env"
 
-/* Global flag for signal handling - volatile ensures visibility across signal
- * handler */
+static const cli_app_meta_t APP_META = {
+    .name = APP_NAME,
+    .version = APP_VERSION,
+    .description =
+        "Lightweight TCP/UDP port check utility for Docker containers.\n"
+        "Returns exit code 0 if port is accessible, 1 otherwise.\n\n"
+        "WARNING: Most UDP servers respond only to valid protocol requests.\n"
+        "This tool sends nearly empty UDP datagram, which may not receive a\n"
+        "response from many services. Use UDP checks only when you are\n"
+        "certain the target will respond appropriately.",
+    .usage = "[OPTIONS]",
+    .examples =
+        "  # Check local HTTP port\n"
+        "  " APP_NAME " --" FLAG_PORT_LONG " 8080\n\n"
+
+        "  # Check remote HTTPS port\n"
+        "  " APP_NAME " --" FLAG_HOST_LONG " example.com --" FLAG_PORT_LONG
+        " 443\n\n"
+
+        "  # Check DNS server (UDP)\n"
+        "  " APP_NAME " --" FLAG_UDP_LONG " --" FLAG_HOST_LONG
+        " 127.0.0.1 --" FLAG_PORT_LONG " 53\n\n"
+
+        "  # Using environment variables\n"
+        "  " FLAG_PORT_ENV "=3000 " APP_NAME "\n\n"
+
+        "  # Override port from environment (useful in Docker)\n"
+        "  APP_PORT=8080 " APP_NAME " --" FLAG_PORT_ENV_LONG " APP_PORT\n\n"
+
+        "  # Custom timeout\n"
+        "  " APP_NAME " --" FLAG_HOST_LONG " db.example.com --" FLAG_PORT_LONG
+        " 5432 --" FLAG_TIMEOUT_LONG " 10\n"};
+
+static const cli_flag_meta_t TCP_FLAG_META = {
+    .long_name = FLAG_TCP_LONG,
+    .description = "Use TCP protocol (default)",
+    .type = FLAG_TYPE_BOOL,
+};
+
+static const cli_flag_meta_t UDP_FLAG_META = {
+    .long_name = FLAG_UDP_LONG,
+    .description = "Use UDP protocol",
+    .type = FLAG_TYPE_BOOL,
+};
+
+static const cli_flag_meta_t HOST_FLAG_META = {
+    .long_name = FLAG_HOST_LONG,
+    .description = "Target hostname or IPv4 address",
+    .env_variable = FLAG_HOST_ENV,
+    .type = FLAG_TYPE_STRING,
+    .default_value = {.string_value = "127.0.0.1"},
+};
+
+static const cli_flag_meta_t HOST_ENV_FLAG_META = {
+    .long_name = FLAG_HOST_ENV_LONG,
+    .description = "Change env variable name for --" FLAG_HOST_LONG,
+    .type = FLAG_TYPE_STRING,
+};
+
+static const cli_flag_meta_t PORT_FLAG_META = {
+    .short_name = FLAG_PORT_SHORT,
+    .long_name = FLAG_PORT_LONG,
+    .description = "Target port number (required)",
+    .env_variable = FLAG_PORT_ENV,
+    .type = FLAG_TYPE_STRING,
+};
+
+static const cli_flag_meta_t PORT_ENV_FLAG_META = {
+    .long_name = FLAG_PORT_ENV_LONG,
+    .description = "Change env variable name for --" FLAG_PORT_LONG,
+    .type = FLAG_TYPE_STRING,
+};
+
+static const cli_flag_meta_t TIMEOUT_FLAG_META = {
+    .short_name = FLAG_TIMEOUT_SHORT,
+    .long_name = FLAG_TIMEOUT_LONG,
+    .description = "Check timeout in seconds",
+    .env_variable = FLAG_TIMEOUT_ENV,
+    .type = FLAG_TYPE_STRING,
+    .default_value = {.string_value = "5"},
+};
+
+static const cli_flag_meta_t TIMEOUT_ENV_FLAG_META = {
+    .long_name = FLAG_TIMEOUT_ENV_LONG,
+    .description = "Change env variable name for --" FLAG_TIMEOUT_LONG,
+    .type = FLAG_TYPE_STRING,
+};
+
+#define ERR_FAILED_TO_SETUP_SIG_HANDLER "Error: failed to setup signal handler"
+#define ERR_ALLOCATION_FAILED "Error: memory allocation failed\n"
+#define ERR_UNKNOWN_PARSING_ERROR "unknown parsing flags error\n"
+#define ERR_TCP_AND_UDP_CONFLICT                                               \
+  "Error: --" FLAG_TCP_LONG " and --" FLAG_UDP_LONG " cannot be used "         \
+  "together\n"
+#define ERR_PORT_REQUIRED                                                      \
+  "Error: port is required (use --" FLAG_PORT_LONG " or set " FLAG_PORT_ENV    \
+  ")\n"
+#define ERR_FAILED_TO_RESOLVE_HOST "Error: failed to resolve host\n"
+#define ERR_INTERRUPTED "Error: operation interrupted by signal\n"
+#define ERR_INVALID_PORT_FORMAT "Error: invalid port value/format"
+#define ERR_INVALID_TIMEOUT_FORMAT "Error: invalid timeout value/format"
+#define ERR_HOST_CANNOT_BE_EMPTY "Error: host cannot be empty\n"
+
+/**
+ * Global flag for signal handling - volatile ensures visibility across signal
+ * handler.
+ */
 static volatile sig_atomic_t interrupted = 0;
-
-/**
- * Configuration structure holding all runtime parameters.
- */
-typedef struct {
-  const char *host;        /* Target host (hostname or IPv4 address) */
-  const char *host_env;    /* Environment variable name for host */
-  int port;                /* Target port number (-1 = not set) */
-  const char *port_env;    /* Environment variable name for port */
-  int timeout;             /* Check timeout in seconds */
-  const char *timeout_env; /* Environment variable name for timeout */
-  protocol_t protocol;     /* Protocol to use (TCP or UDP) */
-} config_t;
-
-/**
- * Command-line option definition.
- * Used for consistent parsing and help generation.
- */
-typedef struct {
-  const char *short_flag;    /* Short option (e.g., "-p") */
-  const char *long_flag;     /* Long option (e.g., "--port") */
-  const char *description;   /* Help text description */
-  const char *default_value; /* Default value for display */
-} option_def_t;
-
-/**
- * Environment variable override option definition.
- * Used for *-env flags that change environment variable names.
- */
-typedef struct {
-  const char *long_flag;          /* Long option (e.g., "--port-env") */
-  const char *description_prefix; /* Description prefix */
-  const option_def_t *parent_opt; /* Parent option this env flag controls */
-  const char *default_env_name;   /* Default environment variable name */
-} env_option_def_t;
-
-/* Option definitions - single source of truth */
-static const option_def_t OPT_HELP = {"-h", "--help", "Show this help message",
-                                      NULL};
-static const option_def_t OPT_TCP = {NULL, "--tcp",
-                                     "Use TCP protocol (default)", NULL};
-static const option_def_t OPT_UDP = {NULL, "--udp", "Use UDP protocol", NULL};
-static const option_def_t OPT_HOST = {
-    NULL, "--host", "Target hostname or IPv4 address (env: CHECK_HOST)",
-    DEFAULT_HOST};
-static const option_def_t OPT_PORT = {
-    "-p", "--port", "Target port number (env: CHECK_PORT, required)", NULL};
-static const option_def_t OPT_TIMEOUT = {
-    "-t", "--timeout", "Check timeout in seconds (env: CHECK_TIMEOUT)", "5"};
-
-/* Environment variable override options - reference parent options */
-static const env_option_def_t OPT_HOST_ENV = {
-    "--host-env", "Change env variable name for", &OPT_HOST, DEFAULT_HOST_ENV};
-static const env_option_def_t OPT_PORT_ENV = {
-    "--port-env", "Change env variable name for", &OPT_PORT, DEFAULT_PORT_ENV};
-static const env_option_def_t OPT_TIMEOUT_ENV = {
-    "--timeout-env", "Change env variable name for", &OPT_TIMEOUT,
-    DEFAULT_TIMEOUT_ENV};
 
 /**
  * Signal handler for SIGINT and SIGTERM.
  * Sets a flag to allow graceful shutdown.
  */
-static void signal_handler(int signum) {
+static void signal_handler(const int signum) {
   (void)signum; // unused parameter
   interrupted = 1;
 }
@@ -123,19 +178,16 @@ static void signal_handler(int signum) {
 static bool setup_signal_handlers(void) {
   struct sigaction sa;
   memset(&sa, 0, sizeof(sa));
+
   sa.sa_handler = signal_handler;
   sigemptyset(&sa.sa_mask);
   sa.sa_flags = 0; // no SA_RESTART - we want EINTR on blocking calls
 
   if (sigaction(SIGINT, &sa, NULL) < 0) {
-    fprintf(stderr, "Error: failed to setup SIGINT handler: %s\n",
-            strerror(errno));
     return false;
   }
 
   if (sigaction(SIGTERM, &sa, NULL) < 0) {
-    fprintf(stderr, "Error: failed to setup SIGTERM handler: %s\n",
-            strerror(errno));
     return false;
   }
 
@@ -143,86 +195,17 @@ static bool setup_signal_handlers(void) {
 }
 
 /**
- * Print usage information and available options.
- * Called with -h/--help flag.
- */
-static void print_help(void) {
-  fprintf(stderr, "%s version %s\n\n", APP_NAME, APP_VERSION);
-  fprintf(stderr, "Lightweight TCP/UDP port check utility for Docker "
-                  "containers.\n");
-  fprintf(stderr,
-          "Returns exit code 0 if port is accessible, 1 otherwise.\n\n");
-
-  fprintf(stderr, "WARNING: Most UDP servers respond only to valid protocol ");
-  fprintf(stderr, "requests. This tool sends nearly empty UDP datagram,\n");
-  fprintf(stderr, "which may not receive a response from many services. ");
-  fprintf(stderr, "Use UDP checks only when you are certain the target\n");
-  fprintf(stderr, "will respond appropriately.\n\n");
-
-  fprintf(stderr, "Usage:\n");
-  fprintf(stderr, "  %s [OPTIONS]\n\n", APP_NAME);
-  fprintf(stderr, "Options:\n");
-
-  // help option
-  fprintf(stderr, "  %s, %-20s %s\n", OPT_HELP.short_flag, OPT_HELP.long_flag,
-          OPT_HELP.description);
-
-  // protocol options
-  fprintf(stderr, "      %-20s %s\n", OPT_TCP.long_flag, OPT_TCP.description);
-  fprintf(stderr, "      %-20s %s\n", OPT_UDP.long_flag, OPT_UDP.description);
-
-  // host options
-  fprintf(stderr, "      %-20s %s (default: %s)\n", OPT_HOST.long_flag,
-          OPT_HOST.description, OPT_HOST.default_value);
-  fprintf(stderr, "      %-20s %s %s (current: %s)\n", OPT_HOST_ENV.long_flag,
-          OPT_HOST_ENV.description_prefix, OPT_HOST_ENV.parent_opt->long_flag,
-          OPT_HOST_ENV.default_env_name);
-
-  // port options
-  fprintf(stderr, "  %s, %-20s %s\n", OPT_PORT.short_flag, OPT_PORT.long_flag,
-          OPT_PORT.description);
-  fprintf(stderr, "      %-20s %s %s (current: %s)\n", OPT_PORT_ENV.long_flag,
-          OPT_PORT_ENV.description_prefix, OPT_PORT_ENV.parent_opt->long_flag,
-          OPT_PORT_ENV.default_env_name);
-
-  // timeout options
-  fprintf(stderr, "  %s, %-20s %s (default: %s)\n", OPT_TIMEOUT.short_flag,
-          OPT_TIMEOUT.long_flag, OPT_TIMEOUT.description,
-          OPT_TIMEOUT.default_value);
-  fprintf(stderr, "      %-20s %s %s (current: %s)\n",
-          OPT_TIMEOUT_ENV.long_flag, OPT_TIMEOUT_ENV.description_prefix,
-          OPT_TIMEOUT_ENV.parent_opt->long_flag,
-          OPT_TIMEOUT_ENV.default_env_name);
-
-  fprintf(stderr, "\nExamples:\n");
-  fprintf(stderr, "  # Check local HTTP port\n");
-  fprintf(stderr, "  %s --port 8080\n\n", APP_NAME);
-
-  fprintf(stderr, "  # Check remote HTTPS port\n");
-  fprintf(stderr, "  %s --host example.com --port 443\n\n", APP_NAME);
-
-  fprintf(stderr, "  # Check DNS server (UDP)\n");
-  fprintf(stderr, "  %s --udp --host 127.0.0.1 --port 53\n\n", APP_NAME);
-
-  fprintf(stderr, "  # Using environment variables\n");
-  fprintf(stderr, "  CHECK_PORT=3000 %s\n\n", APP_NAME);
-
-  fprintf(stderr, "  # Override port from environment (useful in Docker)\n");
-  fprintf(stderr, "  APP_PORT=8080 %s --port-env APP_PORT\n\n", APP_NAME);
-
-  fprintf(stderr, "  # Custom timeout\n");
-  fprintf(stderr, "  %s --host db.example.com --port 5432 --timeout 10\n",
-          APP_NAME);
-}
-
-/**
  * Parse a port number string into an integer.
  * Returns true if valid port (1-65535), false otherwise.
  */
 static bool parse_port(const char *str, int *port) {
+  if (str == NULL || port == NULL || *str == '\0') {
+    return false;
+  }
+
   char *endptr;
   errno = 0;
-  long val = strtol(str, &endptr, 10);
+  const long val = strtol(str, &endptr, 10);
 
   if (errno != 0 || *endptr != '\0' || endptr == str) {
     return false;
@@ -241,9 +224,13 @@ static bool parse_port(const char *str, int *port) {
  * Returns true if valid timeout (1-3600 seconds), false otherwise.
  */
 static bool parse_timeout(const char *str, int *timeout) {
+  if (str == NULL || timeout == NULL || *str == '\0') {
+    return false;
+  }
+
   char *endptr;
   errno = 0;
-  long val = strtol(str, &endptr, 10);
+  const long val = strtol(str, &endptr, 10);
 
   if (errno != 0 || *endptr != '\0' || endptr == str) {
     return false;
@@ -254,52 +241,19 @@ static bool parse_timeout(const char *str, int *timeout) {
   }
 
   *timeout = (int)val;
+
   return true;
-}
-
-/**
- * Check if argument matches a short or long option.
- */
-static inline bool matches_option(const char *arg, const option_def_t *opt) {
-  if (opt->short_flag != NULL && strcmp(arg, opt->short_flag) == 0) {
-    return true;
-  }
-  if (opt->long_flag != NULL && strcmp(arg, opt->long_flag) == 0) {
-    return true;
-  }
-  return false;
-}
-
-/**
- * Check if argument matches an environment variable override option.
- */
-static inline bool matches_env_option(const char *arg,
-                                      const env_option_def_t *opt) {
-  return strcmp(arg, opt->long_flag) == 0;
-}
-
-/**
- * Extract value from --flag=value format.
- * Returns true and sets value pointer if match found.
- */
-static bool extract_equals_value(const char *arg, const char *prefix,
-                                 const char **value) {
-  size_t prefix_len = strlen(prefix);
-  if (strncmp(arg, prefix, prefix_len) == 0) {
-    *value = arg + prefix_len;
-    return true;
-  }
-  return false;
 }
 
 /**
  * Set socket to non-blocking mode.
  */
-static bool set_nonblocking(int sockfd) {
-  int flags = fcntl(sockfd, F_GETFL, 0);
+static bool set_nonblocking(const int sockfd) {
+  const int flags = fcntl(sockfd, F_GETFL, 0);
   if (flags < 0) {
     return false;
   }
+
   return fcntl(sockfd, F_SETFL, flags | O_NONBLOCK) >= 0;
 }
 
@@ -321,36 +275,34 @@ static bool resolve_host(const char *host, struct in_addr *addr) {
   hints.ai_family = AF_INET;       // IPv4
   hints.ai_socktype = SOCK_STREAM; // TCP
 
-  int gai_result = getaddrinfo(host, NULL, &hints, &result_addr);
-
-  if (gai_result != 0) {
-    fprintf(stderr, "Error: failed to resolve host '%s': %s\n", host,
-            gai_strerror(gai_result));
+  const int addr_info = getaddrinfo(host, NULL, &hints, &result_addr);
+  if (addr_info != 0) {
     return false;
   }
 
   if (result_addr == NULL) {
-    fprintf(stderr, "Error: no address found for host '%s'\n", host);
     return false;
   }
 
   // extract IPv4 address from result
   // Validate address family before casting
   if (result_addr->ai_family != AF_INET) {
-    fprintf(stderr, "Error: unexpected address family (expected AF_INET)\n");
     freeaddrinfo(result_addr);
+
     return false;
   }
 
   if (result_addr->ai_addr == NULL) {
-    fprintf(stderr, "Error: address structure is NULL\n");
     freeaddrinfo(result_addr);
+
     return false;
   }
-  struct sockaddr_in *ipv4 = (struct sockaddr_in *)result_addr->ai_addr;
+
+  const struct sockaddr_in *ipv4 = (struct sockaddr_in *)result_addr->ai_addr;
   memcpy(addr, &ipv4->sin_addr, sizeof(*addr));
 
   freeaddrinfo(result_addr);
+
   return true;
 }
 
@@ -358,7 +310,7 @@ static bool resolve_host(const char *host, struct in_addr *addr) {
  * Wait for socket to become writable (connection established) with timeout.
  * Returns true if connected, false on timeout or error.
  */
-static bool wait_for_connect(int sockfd, int timeout_sec) {
+static bool wait_for_connect(const int sockfd, const int timeout_sec) {
   fd_set write_fds;
   fd_set error_fds;
   struct timeval timeout;
@@ -371,20 +323,9 @@ static bool wait_for_connect(int sockfd, int timeout_sec) {
   timeout.tv_sec = timeout_sec;
   timeout.tv_usec = 0;
 
-  int ret = select(sockfd + 1, NULL, &write_fds, &error_fds, &timeout);
+  const int ret = select(sockfd + 1, NULL, &write_fds, &error_fds, &timeout);
 
-  if (ret < 0) {
-    if (errno == EINTR && interrupted) {
-      fprintf(stderr, "Error: operation interrupted by signal\n");
-    } else {
-      fprintf(stderr, "Error: select() failed: %s\n", strerror(errno));
-    }
-    return false;
-  }
-
-  if (ret == 0) {
-    fprintf(stderr, "Error: connection timeout after %d seconds\n",
-            timeout_sec);
+  if (ret <= 0) {
     return false;
   }
 
@@ -393,11 +334,10 @@ static bool wait_for_connect(int sockfd, int timeout_sec) {
     int error = 0;
     socklen_t len = sizeof(error);
     if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &error, &len) < 0) {
-      fprintf(stderr, "Error: getsockopt() failed: %s\n", strerror(errno));
       return false;
     }
+
     if (error != 0) {
-      fprintf(stderr, "Error: connection failed: %s\n", strerror(error));
       return false;
     }
   }
@@ -408,13 +348,13 @@ static bool wait_for_connect(int sockfd, int timeout_sec) {
     int error = 0;
     socklen_t len = sizeof(error);
     if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &error, &len) < 0) {
-      fprintf(stderr, "Error: getsockopt() failed: %s\n", strerror(errno));
       return false;
     }
+
     if (error != 0) {
-      fprintf(stderr, "Error: connection failed: %s\n", strerror(error));
       return false;
     }
+
     return true;
   }
 
@@ -425,36 +365,29 @@ static bool wait_for_connect(int sockfd, int timeout_sec) {
  * Check TCP port accessibility.
  * Returns true if port is open, false otherwise.
  */
-static bool check_tcp_port(const char *host, int port, int timeout_sec) {
-  struct in_addr addr;
-  if (!resolve_host(host, &addr)) {
-    return false;
-  }
-
+static bool check_tcp_port(const struct in_addr addr, const int port,
+                           const int timeout_sec) {
   // create socket
-  int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+  const int sockfd = socket(AF_INET, SOCK_STREAM, 0);
   if (sockfd < 0) {
-    fprintf(stderr, "Error: failed to create socket: %s\n", strerror(errno));
     return false;
   }
 
   // set non-blocking mode
   if (!set_nonblocking(sockfd)) {
-    fprintf(stderr, "Error: failed to set non-blocking mode: %s\n",
-            strerror(errno));
-    close(sockfd);
     return false;
   }
 
   // prepare address
   struct sockaddr_in server_addr;
   memset(&server_addr, 0, sizeof(server_addr));
+
   server_addr.sin_family = AF_INET;
   server_addr.sin_port = htons((uint16_t)port);
   server_addr.sin_addr = addr;
 
   // attempt connection
-  int ret =
+  const int ret =
       connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr));
 
   bool success = false;
@@ -463,10 +396,6 @@ static bool check_tcp_port(const char *host, int port, int timeout_sec) {
     if (errno == EINPROGRESS) {
       // connection in progress - wait for completion
       success = wait_for_connect(sockfd, timeout_sec);
-    } else if (errno == EINTR && interrupted) {
-      fprintf(stderr, "Error: operation interrupted by signal\n");
-    } else {
-      fprintf(stderr, "Error: connection failed: %s\n", strerror(errno));
     }
   } else {
     // connection succeeded immediately (unlikely but possible)
@@ -474,6 +403,7 @@ static bool check_tcp_port(const char *host, int port, int timeout_sec) {
   }
 
   close(sockfd);
+
   return success;
 }
 
@@ -483,26 +413,23 @@ static bool check_tcp_port(const char *host, int port, int timeout_sec) {
  * Uses IP_RECVERR for better ICMP error detection on Linux.
  * Returns true if port is confirmed open, false otherwise.
  */
-static bool check_udp_port(const char *host, int port, int timeout_sec) {
-  struct in_addr addr;
-  if (!resolve_host(host, &addr)) {
-    return false;
-  }
-
+static bool check_udp_port(const struct in_addr addr, const int port,
+                           const int timeout_sec) {
   // create socket
-  int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+  const int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
   if (sockfd < 0) {
-    fprintf(stderr, "Error: failed to create socket: %s\n", strerror(errno));
     return false;
   }
 
-  // enable ICMP error reporting via MSG_ERRQUEUE (Linux-specific, best effort)
-  int on = 1;
+  // enable ICMP error reporting via MSG_ERRQUEUE (Linux-specific, the best
+  // effort)
+  const int on = 1;
   setsockopt(sockfd, IPPROTO_IP, IP_RECVERR, &on, sizeof(on));
 
   // prepare address
   struct sockaddr_in server_addr;
   memset(&server_addr, 0, sizeof(server_addr));
+
   server_addr.sin_family = AF_INET;
   server_addr.sin_port = htons((uint16_t)port);
   server_addr.sin_addr = addr;
@@ -510,9 +437,8 @@ static bool check_udp_port(const char *host, int port, int timeout_sec) {
   // connect() for UDP sets default destination
   if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) <
       0) {
-    fprintf(stderr, "Error: failed to connect UDP socket: %s\n",
-            strerror(errno));
     close(sockfd);
+
     return false;
   }
 
@@ -520,29 +446,19 @@ static bool check_udp_port(const char *host, int port, int timeout_sec) {
   struct timeval tv;
   tv.tv_sec = timeout_sec;
   tv.tv_usec = 0;
+
   if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
-    fprintf(stderr, "Error: failed to set socket timeout: %s\n",
-            strerror(errno));
     close(sockfd);
+
     return false;
   }
 
   // send nearly empty probe datagram (1 byte)
-  char probe[1] = {0};
-  ssize_t sent = send(sockfd, probe, sizeof(probe), 0);
+  const char probe[1] = {0};
+  const ssize_t sent = send(sockfd, probe, sizeof(probe), 0);
   if (sent < 0) {
-    if (errno == ECONNREFUSED) {
-      // immediate ICMP port unreachable
-      fprintf(stderr, "Error: port is closed (ICMP port unreachable)\n");
-      close(sockfd);
-      return false;
-    }
-    if (errno == EINTR && interrupted) {
-      fprintf(stderr, "Error: operation interrupted by signal\n");
-    } else {
-      fprintf(stderr, "Error: failed to send datagram: %s\n", strerror(errno));
-    }
     close(sockfd);
+
     return false;
   }
 
@@ -557,202 +473,338 @@ static bool check_udp_port(const char *host, int port, int timeout_sec) {
   timeout.tv_sec = timeout_sec;
   timeout.tv_usec = 0;
 
-  int ret = select(sockfd + 1, &read_fds, NULL, NULL, &timeout);
+  const int ret = select(sockfd + 1, &read_fds, NULL, NULL, &timeout);
 
   if (ret < 0) {
-    if (errno == EINTR && interrupted) {
-      fprintf(stderr, "Error: operation interrupted by signal\n");
-      close(sockfd);
-      return false;
-    } else {
-      fprintf(stderr, "Error: select() failed: %s\n", strerror(errno));
-      close(sockfd);
-      return false;
-    }
+    close(sockfd);
+
+    return false;
   }
 
   if (ret == 0) {
     // timeout - no response and no ICMP error
     // for healthcheck purposes, consider this a failure
-    fprintf(stderr, "Error: no response from port (filtered or closed)\n");
     close(sockfd);
+
     return false;
   }
 
   // try to receive - check for both data and ICMP errors
-  ssize_t received = recv(sockfd, buffer, sizeof(buffer), 0);
+  const ssize_t received = recv(sockfd, buffer, sizeof(buffer), 0);
   if (received > 0) {
     // received data - port is definitely open
     close(sockfd);
+
     return true;
   }
 
   if (received < 0) {
     // ECONNREFUSED means we got ICMP port unreachable
     if (errno == ECONNREFUSED) {
-      fprintf(stderr, "Error: port is closed (ICMP port unreachable)\n");
       close(sockfd);
+
       return false;
-    } else if (errno == EINTR && interrupted) {
-      fprintf(stderr, "Error: operation interrupted by signal\n");
+    }
+
+    if (errno == EINTR && interrupted) {
       close(sockfd);
+
       return false;
     }
   }
 
   // no data received, no clear error - consider filtered/closed
-  fprintf(stderr, "Error: no response from port (filtered or closed)\n");
   close(sockfd);
+
   return false;
+}
+
+/**
+ * Trim leading and trailing whitespace from a string in place.
+ */
+static void trim_str(char *str) {
+  if (str == NULL || *str == '\0') {
+    return;
+  }
+
+  // find first non-space character
+  const char *start = str;
+  while (*start && isspace((unsigned char)*start)) {
+    start++;
+  }
+
+  // if the string is all spaces
+  if (*start == '\0') {
+    *str = '\0';
+
+    return;
+  }
+
+  // find last non-space character
+  const char *end = str + strlen(str) - 1;
+  while (end > start && isspace((unsigned char)*end)) {
+    end--;
+  }
+
+  // copy trimmed content to the beginning of str
+  const size_t len = (size_t)(end - start + 1);
+  if (start != str) {
+    memmove(str, start, len);
+  }
+
+  // null-terminate the trimmed string
+  str[len] = '\0';
 }
 
 /**
  * Main entry point.
  */
-int main(int argc, char *argv[]) {
+int main(const int argc, const char *argv[]) {
   // setup signal handlers
   if (!setup_signal_handlers()) {
+    fputs(ERR_FAILED_TO_SETUP_SIG_HANDLER, stderr);
+    fputs(": ", stderr);
+    fputs(strerror(errno), stderr);
+    fputc('\n', stderr);
+
     return EXIT_FAILURE_CODE;
   }
 
-  // initialize configuration with defaults
-  config_t config = {
-      .host = DEFAULT_HOST,
-      .host_env = DEFAULT_HOST_ENV,
-      .port = -1,
-      .port_env = DEFAULT_PORT_ENV,
-      .timeout = DEFAULT_TIMEOUT,
-      .timeout_env = DEFAULT_TIMEOUT_ENV,
-      .protocol = PROTO_TCP,
-  };
+  int exit_code = EXIT_FAILURE_CODE;
 
-  // parse command-line arguments
-  bool tcp_specified = false;
-  bool udp_specified = false;
+  // initialize variables that need to be cleaned up on exit
+  cli_app_state_t *app = NULL;
+  cli_args_parsing_result_t *parsing_result = NULL;
+  char *host_value = NULL;
+  char *port_value = NULL;
+  char *timeout_value = NULL;
 
-  for (int i = 1; i < argc; i++) {
-    const char *arg = argv[i];
-    const char *value;
+  // create CLI app instance
+  app = new_cli_app(&APP_META);
+  if (app == NULL) {
+    fputs(ERR_ALLOCATION_FAILED, stderr);
 
-    if (matches_option(arg, &OPT_HELP)) {
-      print_help();
-      return EXIT_SUCCESS_CODE;
-    } else if (matches_option(arg, &OPT_TCP)) {
-      tcp_specified = true;
-      config.protocol = PROTO_TCP;
-    } else if (matches_option(arg, &OPT_UDP)) {
-      udp_specified = true;
-      config.protocol = PROTO_UDP;
-    } else if (matches_option(arg, &OPT_HOST)) {
-      if (i + 1 >= argc) {
-        fprintf(stderr, "Error: %s requires an argument\n", arg);
-        return EXIT_FAILURE_CODE;
+    goto cleanup;
+  }
+
+  // add flags
+  const cli_flag_state_t *help_flag =
+      cli_app_add_flag(app, &CLI_HELP_FLAG_META);
+  const cli_flag_state_t *tcp_flag = cli_app_add_flag(app, &TCP_FLAG_META);
+  const cli_flag_state_t *udp_flag = cli_app_add_flag(app, &UDP_FLAG_META);
+  cli_flag_state_t *host_flag = cli_app_add_flag(app, &HOST_FLAG_META);
+  const cli_flag_state_t *host_env_flag =
+      cli_app_add_flag(app, &HOST_ENV_FLAG_META);
+  cli_flag_state_t *port_flag = cli_app_add_flag(app, &PORT_FLAG_META);
+  const cli_flag_state_t *port_env_flag =
+      cli_app_add_flag(app, &PORT_ENV_FLAG_META);
+  cli_flag_state_t *timeout_flag = cli_app_add_flag(app, &TIMEOUT_FLAG_META);
+  const cli_flag_state_t *timeout_env_flag =
+      cli_app_add_flag(app, &TIMEOUT_ENV_FLAG_META);
+
+  // skip argv[0] by moving the pointer and decreasing argc
+  const char **args = argv + 1;
+  const int argn = (argc > 0) ? argc - 1 : 0;
+
+  // first parse to get possible env variable name overrides
+  parsing_result = cli_app_parse_args(app, args, argn);
+  if (parsing_result == NULL) {
+    fputs(ERR_ALLOCATION_FAILED, stderr);
+
+    goto cleanup;
+  }
+
+  // check for parsing errors
+  if (parsing_result->code != FLAGS_PARSING_OK) {
+    fputs("Error: ", stderr);
+    fputs(parsing_result->message ? parsing_result->message
+                                  : ERR_UNKNOWN_PARSING_ERROR,
+          stderr);
+    fputc('\n', stderr);
+
+    goto cleanup;
+  }
+
+  bool need_reparse = false;
+
+  // override host flag env variable if specified
+  if (host_env_flag->value_source != FLAG_VALUE_SOURCE_DEFAULT) {
+    if (cli_validate_env_name(host_env_flag->value.string_value)) {
+      host_flag->env_variable = strdup(host_env_flag->value.string_value);
+      if (host_flag->env_variable == NULL) {
+        fputs(ERR_ALLOCATION_FAILED, stderr);
+
+        goto cleanup;
       }
-      config.host = argv[++i];
-      if (*config.host == '\0') {
-        fprintf(stderr, "Error: host cannot be empty\n");
-        return EXIT_FAILURE_CODE;
-      }
-    } else if (extract_equals_value(arg, "--host-env=", &value)) {
-      config.host_env = value;
-    } else if (matches_env_option(arg, &OPT_HOST_ENV)) {
-      if (i + 1 >= argc) {
-        fprintf(stderr, "Error: %s requires an argument\n", arg);
-        return EXIT_FAILURE_CODE;
-      }
-      config.host_env = argv[++i];
-    } else if (matches_option(arg, &OPT_PORT)) {
-      if (i + 1 >= argc) {
-        fprintf(stderr, "Error: %s requires an argument\n", arg);
-        return EXIT_FAILURE_CODE;
-      }
-      if (!parse_port(argv[++i], &config.port)) {
-        fprintf(stderr, "Error: port must be between %d and %d\n", MIN_PORT,
-                MAX_PORT);
-        return EXIT_FAILURE_CODE;
-      }
-    } else if (extract_equals_value(arg, "--port-env=", &value)) {
-      config.port_env = value;
-    } else if (matches_env_option(arg, &OPT_PORT_ENV)) {
-      if (i + 1 >= argc) {
-        fprintf(stderr, "Error: %s requires an argument\n", arg);
-        return EXIT_FAILURE_CODE;
-      }
-      config.port_env = argv[++i];
-    } else if (matches_option(arg, &OPT_TIMEOUT)) {
-      if (i + 1 >= argc) {
-        fprintf(stderr, "Error: %s requires an argument\n", arg);
-        return EXIT_FAILURE_CODE;
-      }
-      if (!parse_timeout(argv[++i], &config.timeout)) {
-        fprintf(stderr, "Error: timeout must be between %d and %d seconds\n",
-                MIN_TIMEOUT, MAX_TIMEOUT);
-        return EXIT_FAILURE_CODE;
-      }
-    } else if (extract_equals_value(arg, "--timeout-env=", &value)) {
-      config.timeout_env = value;
-    } else if (matches_env_option(arg, &OPT_TIMEOUT_ENV)) {
-      if (i + 1 >= argc) {
-        fprintf(stderr, "Error: %s requires an argument\n", arg);
-        return EXIT_FAILURE_CODE;
-      }
-      config.timeout_env = argv[++i];
-    } else {
-      fprintf(stderr, "Error: unknown option: %s\n", arg);
-      fprintf(stderr, "Try '%s --help' for usage information\n", APP_NAME);
-      return EXIT_FAILURE_CODE;
+
+      need_reparse = true;
     }
+  }
+
+  // override port flag env variable if specified
+  if (port_env_flag->value_source != FLAG_VALUE_SOURCE_DEFAULT) {
+    if (cli_validate_env_name(port_env_flag->value.string_value)) {
+      port_flag->env_variable = strdup(port_env_flag->value.string_value);
+      if (port_flag->env_variable == NULL) {
+        fputs(ERR_ALLOCATION_FAILED, stderr);
+
+        goto cleanup;
+      }
+
+      need_reparse = true;
+    }
+  }
+
+  // override timeout flag env variable if specified
+  if (timeout_env_flag->value_source != FLAG_VALUE_SOURCE_DEFAULT) {
+    if (cli_validate_env_name(timeout_env_flag->value.string_value)) {
+      timeout_flag->env_variable = strdup(timeout_env_flag->value.string_value);
+      if (timeout_flag->env_variable == NULL) {
+        fputs(ERR_ALLOCATION_FAILED, stderr);
+
+        goto cleanup;
+      }
+
+      need_reparse = true;
+    }
+  }
+
+  // and reparse args to apply the env variable name changes
+  if (need_reparse) {
+    free_cli_args_parsing_result(parsing_result);
+    parsing_result = cli_app_parse_args(app, args, argn);
+    if (parsing_result == NULL) {
+      fputs(ERR_ALLOCATION_FAILED, stderr);
+
+      goto cleanup;
+    }
+
+    // check for parsing errors again
+    if (parsing_result->code != FLAGS_PARSING_OK) {
+      fputs("Error: ", stderr);
+      fputs(parsing_result->message ? parsing_result->message
+                                    : ERR_UNKNOWN_PARSING_ERROR,
+            stderr);
+      fputc('\n', stderr);
+
+      goto cleanup;
+    }
+  }
+
+  // show help if requested and exit
+  if (help_flag->value.bool_value) {
+    const char *help_text = cli_app_help(app);
+    if (!help_text) {
+      goto cleanup;
+    }
+
+    fputs(help_text, stderr);
+    exit_code = EXIT_SUCCESS_CODE;
+
+    goto cleanup;
   }
 
   // check for conflicting protocol flags
-  if (tcp_specified && udp_specified) {
-    fprintf(stderr, "Error: --tcp and --udp cannot be used together\n");
-    return EXIT_FAILURE_CODE;
+  if (tcp_flag->value.bool_value && udp_flag->value.bool_value) {
+    fputs(ERR_TCP_AND_UDP_CONFLICT, stderr);
+
+    goto cleanup;
   }
 
-  // resolve host from environment if not explicitly set
-  const char *env_host = getenv(config.host_env);
-  if (env_host != NULL && *env_host != '\0') {
-    config.host = env_host;
+  // determine protocol (true = tcp, false = udp)
+  bool use_tcp = true;
+  if (udp_flag->value.bool_value) {
+    use_tcp = false;
   }
 
-  // resolve port from environment if not explicitly set
-  if (config.port == -1) {
-    const char *env_port = getenv(config.port_env);
-    if (env_port != NULL) {
-      int parsed_port;
-      if (parse_port(env_port, &parsed_port)) {
-        config.port = parsed_port;
-      }
-      // silently ignore invalid environment values
+  // read final flag values
+  host_value = host_flag->value.string_value
+                   ? strdup(host_flag->value.string_value)
+                   : NULL;
+  port_value = port_flag->value.string_value
+                   ? strdup(port_flag->value.string_value)
+                   : NULL;
+  timeout_value = timeout_flag->value.string_value
+                      ? strdup(timeout_flag->value.string_value)
+                      : NULL;
+
+  if (host_value) {
+    trim_str(host_value);
+  }
+
+  if (port_value) {
+    trim_str(port_value);
+  }
+
+  if (timeout_value) {
+    trim_str(timeout_value);
+  }
+
+  // validate host
+  if (host_value == NULL || strlen(host_value) == 0) {
+    fputs(ERR_HOST_CANNOT_BE_EMPTY, stderr);
+
+    goto cleanup;
+  }
+
+  int port = 0;
+
+  // validate port
+  {
+    if (port_value == NULL || strlen(port_value) == 0) {
+      fputs(ERR_PORT_REQUIRED, stderr);
+
+      goto cleanup;
+    }
+
+    if (!parse_port(port_value, &port)) {
+      fputs(ERR_INVALID_PORT_FORMAT, stderr);
+      fputs(": '", stderr);
+      fputs(port_value, stderr);
+      fputs("'\n", stderr);
+
+      goto cleanup;
     }
   }
 
-  // validate that port was provided
-  if (config.port == -1) {
-    fprintf(stderr, "Error: port is required (use --port or set %s)\n",
-            config.port_env);
-    fprintf(stderr, "Try '%s --help' for usage information\n", APP_NAME);
-    return EXIT_FAILURE_CODE;
+  int timeout = 0;
+
+  // validate timeout
+  if (!parse_timeout(timeout_value, &timeout)) {
+    fputs(ERR_INVALID_TIMEOUT_FORMAT, stderr);
+    fputs(": '", stderr);
+    fputs(timeout_value, stderr);
+    fputs("'\n", stderr);
+
+    goto cleanup;
   }
 
-  // resolve timeout from environment if not explicitly set via flag
-  const char *env_timeout = getenv(config.timeout_env);
-  if (env_timeout != NULL) {
-    int parsed_timeout;
-    if (parse_timeout(env_timeout, &parsed_timeout)) {
-      config.timeout = parsed_timeout;
-    }
-    // silently ignore invalid environment values
+  // check for interruption
+  if (interrupted) {
+    fputs(ERR_INTERRUPTED, stderr);
+
+    goto cleanup;
+  // }
+
+  struct in_addr addr;
+  if (!resolve_host(host_value, &addr)) {
+    fputs(ERR_FAILED_TO_RESOLVE_HOST, stderr);
+
+    goto cleanup;
   }
 
   // perform the port check
-  bool success;
-  if (config.protocol == PROTO_TCP) {
-    success = check_tcp_port(config.host, config.port, config.timeout);
-  } else {
-    success = check_udp_port(config.host, config.port, config.timeout);
-  }
+  const bool success = use_tcp ? check_tcp_port(addr, port, timeout)
+                               : check_udp_port(addr, port, timeout);
 
-  return success ? EXIT_SUCCESS_CODE : EXIT_FAILURE_CODE;
+  exit_code = success ? EXIT_SUCCESS_CODE : EXIT_FAILURE_CODE;
+
+cleanup:
+  free_cli_args_parsing_result(parsing_result);
+  free_cli_app(app);
+  free(host_value);
+  free(port_value);
+  free(timeout_value);
+
+  return exit_code;
 }
