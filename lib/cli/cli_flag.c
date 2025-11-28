@@ -201,7 +201,8 @@ cli_flag_state_t *cli_internal_new_flag_state(const cli_flag_meta_t *fm) {
   case FLAG_TYPE_STRING: {
     // set default string value if provided
     if (fm->default_value.string_value) {
-      if (!cli_internal_set_flag_value_string(fs, fm->default_value.string_value)) {
+      if (!cli_internal_set_flag_value_string(fs,
+                                              fm->default_value.string_value)) {
         cli_internal_free_flag_state(fs);
 
         return NULL;

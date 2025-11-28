@@ -403,20 +403,14 @@ void free_cli_args_parsing_result(cli_args_parsing_result_t *res) {
 }
 
 /**
- * Create a new parsing result with optional formatted error message.
+ * Create a new parsing result with optional error message from string array.
  *
- * Returns NULL on allocation failure or formatting error.
- * If code != FLAGS_PARSING_OK, fmt should be provided for better error
- * reporting.
- *
- * TODO: replace vsnprintf with a simple strings concatenation.
+ * Returns NULL on allocation failure.
+ * strings array should be NULL-terminated.
  */
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((format(printf, 2, 3)))
-#endif
 static cli_args_parsing_result_t *
-new_args_parsing_result(const CliArgsParsingErrorCode code, const char *fmt,
-                        ...) {
+new_args_parsing_result(const CliArgsParsingErrorCode code,
+                        const char *const *strings) {
   cli_args_parsing_result_t *res = malloc(sizeof(cli_args_parsing_result_t));
   if (!res) {
     return NULL;
@@ -425,52 +419,48 @@ new_args_parsing_result(const CliArgsParsingErrorCode code, const char *fmt,
   res->code = code;
   res->message = NULL;
 
-  if (!fmt) {
+  if (!strings || !strings[0]) {
     return res; // no message requested
   }
 
-  va_list args;
-  va_start(args, fmt);
+  // calculate total length
+  size_t total_len = 0;
+  for (size_t i = 0; strings[i] != NULL; i++) {
+    const size_t str_len = strlen(strings[i]);
+    // check for overflow
+    if (total_len > SIZE_MAX - str_len) {
+      free(res);
 
-  // calculate required size
-  va_list args_copy;
-  va_copy(args_copy, args);
-  const int len = vsnprintf(NULL, 0, fmt, args_copy);
-  va_end(args_copy);
+      return NULL;
+    }
 
-  if (len < 0) {
-    va_end(args);
-    free(res);
-    return NULL;
+    total_len += str_len;
   }
 
-  const size_t len_u = (size_t)len;
-
-  // check for overflow: len_u + 1 must fit in size_t
-  if (len_u > SIZE_MAX - 1) {
-    va_end(args);
+  // check for overflow: total_len + 1 must fit in size_t
+  if (total_len > SIZE_MAX - 1) {
     free(res);
+
     return NULL;
   }
 
   // allocate buffer
-  res->message = malloc(len_u + 1);
+  res->message = malloc(total_len + 1);
   if (!res->message) {
-    va_end(args);
     free(res);
+
     return NULL;
   }
 
-  // format the message
-  const int written = vsnprintf(res->message, len_u + 1, fmt, args);
-  va_end(args);
-
-  // sanity check
-  if (written < 0 || (size_t)written != len_u) {
-    free(res->message);
-    free(res);
-    return NULL;
+  // concatenate strings
+  char *dest = res->message;
+  for (size_t i = 0; strings[i] != NULL; i++) {
+    const size_t str_len = strlen(strings[i]);
+    memcpy(dest, strings[i], str_len);
+    dest += str_len;
   }
+
+  *dest = '\0';
 
   return res;
 }
@@ -487,8 +477,9 @@ cli_app_parse_args(cli_app_state_t *app, const char *argv[], const int argc) {
 
   // validate input arguments
   if (!app || !argv || argc < 0) {
-    res = new_args_parsing_result(FLAGS_PARSING_INVALID_ARGUMENTS,
-                                  "invalid arguments to cli_app_parse_args");
+    res = new_args_parsing_result(
+        FLAGS_PARSING_INVALID_ARGUMENTS,
+        (const char *[]){"invalid arguments to cli_app_parse_args", NULL});
     if (!res) {
       return NULL;
     }
@@ -523,8 +514,9 @@ cli_app_parse_args(cli_app_state_t *app, const char *argv[], const int argc) {
 
       const flag_search_result_t found = app_find_flag(app, arg);
       if (!found.flag) {
-        res = new_args_parsing_result(FLAGS_PARSING_UNKNOWN_FLAG,
-                                      "unknown flag: %s", arg);
+        res = new_args_parsing_result(
+            FLAGS_PARSING_UNKNOWN_FLAG,
+            (const char *[]){"unknown flag: ", arg, NULL});
         if (!res) {
           return NULL;
         }
@@ -543,8 +535,9 @@ cli_app_parse_args(cli_app_state_t *app, const char *argv[], const int argc) {
             return NULL; // pattern allocation failure
           }
 
-          res = new_args_parsing_result(FLAGS_PARSING_DUPLICATE_FLAG,
-                                        "duplicate boolean flag: %s", pattern);
+          res = new_args_parsing_result(
+              FLAGS_PARSING_DUPLICATE_FLAG,
+              (const char *[]){"duplicate boolean flag: ", pattern, NULL});
           free(pattern);
           if (!res) {
             return NULL;
@@ -579,7 +572,8 @@ cli_app_parse_args(cli_app_state_t *app, const char *argv[], const int argc) {
 
             res = new_args_parsing_result(
                 FLAGS_PARSING_INVALID_VALUE,
-                "invalid value [%s] for boolean flag %s", value, pattern);
+                (const char *[]){"invalid value [", value,
+                                 "] for boolean flag ", pattern, NULL});
             free(value);
             free(pattern);
             if (!res) {
@@ -605,8 +599,9 @@ cli_app_parse_args(cli_app_state_t *app, const char *argv[], const int argc) {
             return NULL; // pattern allocation failure
           }
 
-          res = new_args_parsing_result(FLAGS_PARSING_DUPLICATE_FLAG,
-                                        "duplicate flag: %s", pattern);
+          res = new_args_parsing_result(
+              FLAGS_PARSING_DUPLICATE_FLAG,
+              (const char *[]){"duplicate flag: ", pattern, NULL});
           free(pattern);
           if (!res) {
             return NULL;
@@ -635,8 +630,9 @@ cli_app_parse_args(cli_app_state_t *app, const char *argv[], const int argc) {
             return NULL; // pattern allocation failure
           }
 
-          res = new_args_parsing_result(FLAGS_PARSING_MISSING_VALUE,
-                                        "missing value for flag %s", pattern);
+          res = new_args_parsing_result(
+              FLAGS_PARSING_MISSING_VALUE,
+              (const char *[]){"missing value for flag ", pattern, NULL});
           free(pattern);
           if (!res) {
             return NULL;
@@ -655,7 +651,8 @@ cli_app_parse_args(cli_app_state_t *app, const char *argv[], const int argc) {
 
           res = new_args_parsing_result(
               FLAGS_PARSING_INVALID_VALUE,
-              "invalid characters in value for flag %s", pattern);
+              (const char *[]){"invalid characters in value for flag ", pattern,
+                               NULL});
           free(pattern);
           free(value);
           if (!res) {
@@ -694,8 +691,9 @@ cli_app_parse_args(cli_app_state_t *app, const char *argv[], const int argc) {
             return NULL; // pattern allocation failure
           }
 
-          res = new_args_parsing_result(FLAGS_PARSING_MISSING_VALUE,
-                                        "missing value for flag %s", pattern);
+          res = new_args_parsing_result(
+              FLAGS_PARSING_MISSING_VALUE,
+              (const char *[]){"missing value for flag ", pattern, NULL});
           free(pattern);
           if (!res) {
             return NULL;
@@ -722,7 +720,8 @@ cli_app_parse_args(cli_app_state_t *app, const char *argv[], const int argc) {
 
           res = new_args_parsing_result(
               FLAGS_PARSING_INVALID_VALUE,
-              "invalid characters in value for flag %s", pattern);
+              (const char *[]){"invalid characters in value for flag ", pattern,
+                               NULL});
           free(pattern);
           free(value);
           if (!res) {
@@ -751,7 +750,8 @@ cli_app_parse_args(cli_app_state_t *app, const char *argv[], const int argc) {
 
         res = new_args_parsing_result(
             FLAGS_PARSING_UNKNOWN_FLAG,
-            "internal error: unknown flag type for flag %s", pattern);
+            (const char *[]){"internal error: unknown flag type for flag ",
+                             pattern, NULL});
         free(pattern);
         if (!res) {
           return NULL;

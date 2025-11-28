@@ -8,64 +8,67 @@
 #include <unistd.h>
 
 /**
- * Append formatted string to a dynamically allocated buffer.
+ * Append strings to a dynamically allocated buffer.
  * Reallocates buffer as needed.
+ *
+ * @param dest Pointer to destination buffer (it may be NULL or contain data)
+ * @param strings NULL-terminated array of strings to append (NULL strings are
+ * skipped)
  *
  * Returns the number of characters added (excluding null terminator),
  * or 0 on error.
- *
- * TODO: replace vsnprintf with a simple strings concatenation.
  */
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((format(printf, 2, 3)))
-#endif
-static size_t
-str_add_f(char **dest, const char *fmt, ...) {
-  if (!dest || !fmt) {
+static size_t str_add_strs(char **dest, const char *const *strings) {
+  if (!dest || !strings) {
     return 0;
   }
 
-  va_list args, args_copy;
+  // calculate total length of all strings
+  size_t add_len = 0;
+  for (size_t i = 0; strings[i] != NULL; i++) {
+    if (strings[i]) {
+      const size_t str_len = strlen(strings[i]);
 
-  // calculate required size for formatted string
-  va_start(args, fmt);
-  va_copy(args_copy, args);
-  const int add_len = vsnprintf(NULL, 0, fmt, args);
-  va_end(args);
+      // check overflow
+      if (str_len > SIZE_MAX - add_len) {
+        return 0;
+      }
 
-  if (add_len < 0) {
-    va_end(args_copy);
-
-    return 0;
+      add_len += str_len;
+    }
   }
 
-  const size_t add_len_u = (size_t)add_len;
   const size_t curr_len = (*dest != NULL) ? strlen(*dest) : 0;
 
-  // check overflow: ensure we can safely add curr_len + add_len_u + 1
-  if (add_len_u > SIZE_MAX - 1 || curr_len > SIZE_MAX - add_len_u - 1) {
-    va_end(args_copy);
-
+  // check overflow: ensure we can safely add curr_len + add_len + 1
+  if (curr_len > SIZE_MAX - add_len - 1) {
     return 0;
   }
 
-  const size_t new_len = curr_len + add_len_u + 1; // +1 for null terminator
+  const size_t new_len = curr_len + add_len + 1; // +1 for null terminator
 
   // reallocate buffer
   char *new_buf = realloc(*dest, new_len);
   if (!new_buf) {
-    va_end(args_copy);
-
     return 0;
   }
 
   *dest = new_buf;
 
-  // append formatted string
-  vsnprintf(*dest + curr_len, add_len_u + 1, fmt, args_copy);
-  va_end(args_copy);
+  // append all strings
+  char *write_pos = *dest + curr_len;
+  for (size_t i = 0; strings[i] != NULL; i++) {
+    if (strings[i]) {
+      const size_t str_len = strlen(strings[i]);
+      memcpy(write_pos, strings[i], str_len);
+      write_pos += str_len;
+    }
+  }
 
-  return add_len_u;
+  // null terminate
+  *write_pos = '\0';
+
+  return add_len;
 }
 
 /**
@@ -95,31 +98,35 @@ char *cli_app_help(const cli_app_state_t *state) {
   buf[0] = '\0'; // Initialize as empty string
 
   // app name and version
-  if (!str_add_f(&buf, "%s%s%s", state->meta->name ? state->meta->name : "app",
-                 state->meta->version ? " " : "",
-                 state->meta->version ? state->meta->version : "")) {
+  if (!str_add_strs(&buf, (const char *[]){
+                              state->meta->name ? state->meta->name : "app",
+                              state->meta->version ? " " : "",
+                              state->meta->version ? state->meta->version : "",
+                              NULL})) {
     goto fail;
   }
 
   // description
   if (state->meta->description) {
-    if (!str_add_f(&buf, "\n\n%s", state->meta->description)) {
+    if (!str_add_strs(
+            &buf, (const char *[]){"\n\n", state->meta->description, NULL})) {
       goto fail;
     }
   }
 
   // usage
   if (state->meta->usage) {
-    if (!str_add_f(&buf, "\n\nUsage: %s %s",
-                   state->meta->name ? state->meta->name : "app",
-                   state->meta->usage)) {
+    if (!str_add_strs(&buf, (const char *[]){
+                                "\n\nUsage: ",
+                                state->meta->name ? state->meta->name : "app",
+                                " ", state->meta->usage, NULL})) {
       goto fail;
     }
   }
 
   // options (flags)
   if (state->flags.count > 0) {
-    if (!str_add_f(&buf, "\n\nOptions:\n")) {
+    if (!str_add_strs(&buf, (const char *[]){"\n\nOptions:\n", NULL})) {
       goto fail;
     }
 
@@ -164,12 +171,15 @@ char *cli_app_help(const cli_app_state_t *state) {
       size_t padding = 0;
 
       if (fs->meta->short_name && fs->meta->long_name) {
-        padding = str_add_f(&buf, "  -%s, --%s", fs->meta->short_name,
-                            fs->meta->long_name);
+        padding = str_add_strs(
+            &buf, (const char *[]){"  -", fs->meta->short_name, ", --",
+                                   fs->meta->long_name, NULL});
       } else if (fs->meta->short_name) {
-        padding = str_add_f(&buf, "  -%s", fs->meta->short_name);
+        padding = str_add_strs(
+            &buf, (const char *[]){"  -", fs->meta->short_name, NULL});
       } else if (fs->meta->long_name) {
-        padding = str_add_f(&buf, "      --%s", fs->meta->long_name);
+        padding = str_add_strs(
+            &buf, (const char *[]){"      --", fs->meta->long_name, NULL});
       } else {
         // skip flags with no names (should not happen due to cli_app_add_flag
         // validation)
@@ -197,7 +207,8 @@ char *cli_app_help(const cli_app_state_t *state) {
         memset(spaces, ' ', spaces_needed);
         spaces[spaces_needed] = '\0';
 
-        const size_t written = str_add_f(&buf, "%s", spaces);
+        const size_t written =
+            str_add_strs(&buf, (const char *[]){spaces, NULL});
 
         free(spaces);
 
@@ -208,7 +219,8 @@ char *cli_app_help(const cli_app_state_t *state) {
 
       // append description
       if (fs->meta->description) {
-        if (!str_add_f(&buf, "%s", fs->meta->description)) {
+        if (!str_add_strs(&buf,
+                          (const char *[]){fs->meta->description, NULL})) {
           goto fail;
         }
       }
@@ -221,8 +233,10 @@ char *cli_app_help(const cli_app_state_t *state) {
 
       case FLAG_TYPE_STRING: {
         if (fs->meta->default_value.string_value) {
-          if (!str_add_f(&buf, " (default: \"%s\")",
-                         fs->meta->default_value.string_value)) {
+          if (!str_add_strs(
+                  &buf, (const char *[]){" (default: \"",
+                                         fs->meta->default_value.string_value,
+                                         "\")", NULL})) {
             goto fail;
           }
         }
@@ -233,7 +247,7 @@ char *cli_app_help(const cli_app_state_t *state) {
       case FLAG_TYPE_STRINGS: {
         if (fs->meta->default_value.strings_value.count > 0) {
           // start building the strings list representation
-          if (!str_add_f(&buf, " (default: [")) {
+          if (!str_add_strs(&buf, (const char *[]){" (default: [", NULL})) {
             goto fail;
           }
 
@@ -245,8 +259,10 @@ char *cli_app_help(const cli_app_state_t *state) {
               str_value = "(null)";
             }
 
-            if (!str_add_f(&buf, "%s\"%s\"%s", j == 0 ? "" : ", ", str_value,
-                           j + 1 < count ? "" : "])")) {
+            if (!str_add_strs(&buf, (const char *[]){j == 0 ? "" : ", ", "\"",
+                                                     str_value, "\"",
+                                                     j + 1 < count ? "" : "])",
+                                                     NULL})) {
               goto fail;
             }
           }
@@ -258,14 +274,15 @@ char *cli_app_help(const cli_app_state_t *state) {
 
       // append environment variable if present
       if (fs->env_variable) {
-        if (!str_add_f(&buf, " [$%s]", fs->env_variable)) {
+        if (!str_add_strs(
+                &buf, (const char *[]){" [$", fs->env_variable, "]", NULL})) {
           goto fail;
         }
       }
 
       // append "\n" only if this is not the last flag
       if (i + 1 < state->flags.count) {
-        if (!str_add_f(&buf, "\n")) {
+        if (!str_add_strs(&buf, (const char *[]){"\n", NULL})) {
           goto fail;
         }
       }
@@ -274,7 +291,8 @@ char *cli_app_help(const cli_app_state_t *state) {
 
   // examples
   if (state->meta->examples) {
-    if (!str_add_f(&buf, "\n\nExamples:\n%s", state->meta->examples)) {
+    if (!str_add_strs(&buf, (const char *[]){"\n\nExamples:\n",
+                                             state->meta->examples, NULL})) {
       goto fail;
     }
   }
