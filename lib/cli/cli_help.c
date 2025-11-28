@@ -13,6 +13,8 @@
  *
  * Returns the number of characters added (excluding null terminator),
  * or 0 on error.
+ *
+ * TODO: replace vsnprintf with a simple strings concatenation.
  */
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((format(printf, 2, 3)))
@@ -77,7 +79,19 @@ char *cli_app_help(const cli_app_state_t *state) {
     return NULL;
   }
 
-  char *buf = NULL;
+  const size_t estimated_size =
+      (state->meta->name ? strlen(state->meta->name) : 0) +
+      (state->meta->version ? strlen(state->meta->version) : 0) +
+      (state->meta->description ? strlen(state->meta->description) : 0) +
+      (state->meta->usage ? strlen(state->meta->usage) : 0) +
+      (state->flags.count * 48) + // rough estimate
+      (state->meta->examples ? strlen(state->meta->examples) : 0) +
+      64; // extra padding
+
+  char *buf = malloc(estimated_size);
+  if (!buf) {
+    return NULL;
+  }
 
   // app name and version
   if (!str_add_f(&buf, "%s%s%s", state->meta->name ? state->meta->name : "app",

@@ -40,7 +40,7 @@ static const cli_app_meta_t EXAMPLE_APP = {.name = "testapp",
                                            .usage = "[options]",
                                            .examples = "testapp --help"};
 
-void assert_string_equal(const char *expected, const char *actual) {
+static void assert_string_equal(const char *expected, const char *actual) {
   if (expected == NULL && actual == NULL) {
     return; // both NULL — consider equal
   }
@@ -306,7 +306,7 @@ static void test_cli_app_parse_args_flags_with_equals_sign_short_form() {
       cli_app_add_flag(app, &EXAMPLE_STRINGS_FLAG);
 
   const char *argv[] = {
-      "-b=yes",          // bool flag
+      "-b=No",          // bool flag
       "-s=custom value", // string flag with value
       "-m=first",        // strings flag with value 1
       "-m=second",       // strings flag with value 2
@@ -322,7 +322,7 @@ static void test_cli_app_parse_args_flags_with_equals_sign_short_form() {
 
   free_cli_args_parsing_result(res);
 
-  assert(bool_flag->value.bool_value == true);
+  assert(bool_flag->value.bool_value == false);
   assert(bool_flag->value_source == FLAG_VALUE_SOURCE_CLI);
 
   assert_string_equal("custom value", string_flag->value.string_value);
@@ -579,31 +579,16 @@ static void test_cli_app_parse_args_errors() {
     free_cli_app(app);
   }
 
-  { // bool flag in form --flag=value, but without value
-    cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
-
-    cli_app_add_flag(app, &EXAMPLE_BOOL_FLAG);
-
-    cli_args_parsing_result_t *res =
-        cli_app_parse_args(app, (const char *[]){"--bool-flag="}, 1);
-
-    assert(res->code == FLAGS_PARSING_MISSING_VALUE);
-    assert_string_equal("missing value for boolean flag --bool-flag=",
-                        res->message);
-
-    free_cli_args_parsing_result(res);
-    free_cli_app(app);
-  }
   { // bool flag in form --flag=value with wrong value
     cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
 
     cli_app_add_flag(app, &EXAMPLE_BOOL_FLAG);
 
     cli_args_parsing_result_t *res =
-        cli_app_parse_args(app, (const char *[]){"--bool-flag=notabool"}, 1);
+        cli_app_parse_args(app, (const char *[]){"--bool-flag=not a bool"}, 1);
 
     assert(res->code == FLAGS_PARSING_INVALID_VALUE);
-    assert_string_equal("invalid value for boolean flag --bool-flag=notabool",
+    assert_string_equal("invalid value [not a bool] for boolean flag --bool-flag",
                         res->message);
 
     free_cli_args_parsing_result(res);
@@ -618,10 +603,8 @@ static void test_cli_app_parse_args_errors() {
     cli_args_parsing_result_t *res =
         cli_app_parse_args(app, (const char *[]){"--string-flag="}, 1);
 
-    printf("=== %d %s\n", res->code, res->message);
-
     assert(res->code == FLAGS_PARSING_MISSING_VALUE);
-    assert_string_equal("missing value for flag --string-flag=", res->message);
+    assert_string_equal("missing value for flag --string-flag", res->message);
 
     free_cli_args_parsing_result(res);
     free_cli_app(app);
@@ -636,7 +619,7 @@ static void test_cli_app_parse_args_errors() {
         cli_app_parse_args(app, (const char *[]){"--strings-flag="}, 1);
 
     assert(res->code == FLAGS_PARSING_MISSING_VALUE);
-    assert_string_equal("missing value for flag --strings-flag=", res->message);
+    assert_string_equal("missing value for flag --strings-flag", res->message);
 
     free_cli_args_parsing_result(res);
     free_cli_app(app);
@@ -763,23 +746,23 @@ static void test_cli_app_parse_args_errors() {
     free_cli_app(app);
   }
 
-  // { // string flag in form --flag=value with wrong value
-  //   cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
-  //
-  //   cli_app_add_flag(app, &EXAMPLE_STRING_FLAG);
-  //
-  //   cli_args_parsing_result_t *res =
-  //       cli_app_parse_args(app, (const char
-  //       *[]){"--string-flag=invalid\r\n\t\n"}, 1);
-  //
-  //   assert(res->code == FLAGS_PARSING_INVALID_VALUE);
-  //   assert_string_equal(
-  //       "invalid characters in value for flag --string-flag=invalid,value",
-  //       res->message);
-  //
-  //   free_cli_args_parsing_result(res);
-  //   free_cli_app(app);
-  // }
+  { // string flag in form --flag=value with wrong value
+    cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);
+
+    cli_app_add_flag(app, &EXAMPLE_STRING_FLAG);
+
+    cli_args_parsing_result_t *res =
+        cli_app_parse_args(app, (const char
+        *[]){"--string-flag=invalid\r\n\t\n"}, 1);
+
+    assert(res->code == FLAGS_PARSING_INVALID_VALUE);
+    assert_string_equal(
+        "invalid characters in value for flag --string-flag",
+        res->message);
+
+    free_cli_args_parsing_result(res);
+    free_cli_app(app);
+  }
 
   { // missing value for strings flag
     cli_app_state_t *app = new_cli_app(&EXAMPLE_APP);

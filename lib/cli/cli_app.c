@@ -234,9 +234,9 @@ static bool set_flag_value_from_env(cli_flag_state_t *fs) {
  * Result of searching for a flag in an argument.
  */
 typedef struct {
-  const cli_flag_state_t *flag; // found flag state, NULL if not found
-  const char *arg;              // argument we parsed
-  size_t pattern_start;         // offset where flag pattern starts in arg
+  cli_flag_state_t *flag; // found flag state, NULL if not found
+  const char *arg;        // argument we parsed
+  size_t pattern_start;   // offset where flag pattern starts in arg
   size_t pattern_len; // length of flag pattern (e.g., "-v"=2, "--verbose"=9)
   size_t value_start; // offset where value starts (after '='), 0 if no value
   size_t value_len;   // length of value, 0 if no value
@@ -246,7 +246,7 @@ typedef struct {
  * Check if flag has a value (contains '=').
  */
 static inline bool flag_search_has_value(const flag_search_result_t *result) {
-  return result && result->value_len > 0;
+  return result && result->value_start > 0 && result->value_len > 0;
 }
 
 /**
@@ -332,7 +332,7 @@ static flag_search_result_t app_find_flag(const cli_app_state_t *app,
 
   // search for matching flag
   for (size_t i = 0; i < app->flags.count; i++) {
-    const cli_flag_state_t *fs = app->flags.list[i];
+    cli_flag_state_t *fs = app->flags.list[i];
     if (!fs || !fs->meta) {
       continue;
     }
@@ -364,70 +364,6 @@ static flag_search_result_t app_find_flag(const cli_app_state_t *app,
 }
 
 /**
- * Copy all command-line arguments as-is to the app state args.
- */
-static bool app_copy_all_args(cli_app_state_t *app, const char *argv[],
-                              const int argc) {
-  // clear existing arguments if any
-  if (app->args.list && app->args.count > 0) {
-    for (size_t i = 0; i < app->args.count; i++) {
-      free(app->args.list[i]);
-    }
-
-    free(app->args.list);
-    app->args.list = NULL;
-    app->args.count = 0;
-  }
-
-  if (argc == 0) {
-    return true;
-  }
-
-  if ((size_t)argc > SIZE_MAX / sizeof(char *)) {
-    return false;
-  }
-
-  // copy all argv entries
-  app->args.list = malloc(sizeof(char *) * (size_t)argc);
-  if (!app->args.list) {
-    return false;
-  }
-
-  for (size_t i = 0; i < (size_t)argc; i++) {
-    if (!argv[i]) {
-      // free previously allocated entries
-      for (size_t j = 0; j < i; j++) {
-        free(app->args.list[j]);
-      }
-
-      free(app->args.list);
-      app->args.list = NULL;
-      app->args.count = 0;
-
-      return false;
-    }
-
-    app->args.list[i] = strdup(argv[i]);
-    if (!app->args.list[i]) {
-      // free previously allocated entries
-      for (size_t j = 0; j < i; j++) {
-        free(app->args.list[j]);
-      }
-
-      free(app->args.list);
-      app->args.list = NULL;
-      app->args.count = 0;
-
-      return false;
-    }
-  }
-
-  app->args.count = (size_t)argc;
-
-  return true;
-}
-
-/**
  * Free resources inside a parsing_result_t.
  */
 void free_cli_args_parsing_result(cli_args_parsing_result_t *res) {
@@ -448,6 +384,8 @@ void free_cli_args_parsing_result(cli_args_parsing_result_t *res) {
  * Returns NULL on allocation failure or formatting error.
  * If code != FLAGS_PARSING_OK, fmt should be provided for better error
  * reporting.
+ *
+ * TODO: replace vsnprintf with a simple strings concatenation.
  */
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((format(printf, 2, 3)))
@@ -534,20 +472,6 @@ cli_app_parse_args(cli_app_state_t *app, const char *argv[], const int argc) {
     return res;
   }
 
-  // if we have no flags defined, just copy all argv entries as-is to args
-  if (app->flags.count == 0) {
-    if (app_copy_all_args(app, argv, argc)) {
-      res = new_args_parsing_result(FLAGS_PARSING_OK, NULL);
-      if (!res) {
-        return NULL;
-      }
-
-      return res;
-    }
-
-    return NULL; // copying args allocation failed
-  }
-
   // first, set flag values from environment variables
   for (size_t i = 0; i < app->flags.count; i++) {
     if (app->flags.list[i]) {
@@ -555,260 +479,294 @@ cli_app_parse_args(cli_app_state_t *app, const char *argv[], const int argc) {
     }
   }
 
+  bool flags_done = false;
+
   // next, parse command-line arguments
-  for (int i = 0; i < argc; i++) {
+  for (size_t i = 0; i < (size_t)argc; i++) {
     const char *arg = argv[i];
-    if (arg == NULL) {
-      continue; // skip NULL arguments
+    if (arg == NULL || strlen(arg) == 0) {
+      continue; // skip NULL or empty arguments
     }
 
-    const flag_search_result_t temp = app_find_flag(app, arg); // TODO: dummy
-    (void) flag_search_get_value(&temp);
-    (void) flag_search_get_pattern(&temp);
+    // flag argument
+    if (!flags_done && arg[0] == '-') {
+      // "--" indicates end of flags, all subsequent args are positional
+      if (strcmp(arg, "--") == 0) {
+        flags_done = true;
 
-    //   // if arg starts with '-', it's a flag
-    //   if (arg[0] == '-') {
-    //     // find the flag
-    //     const char *value_start = NULL;
-    //     const flag_search_result_t found = app_find_flag(app, arg);
-    //     if (!found.flag) {
-    //       res->code = FLAGS_PARSING_UNKNOWN_FLAG;
-    //       str_add_f(&res->message, "unknown flag: %s", arg);
-    //       if (!res->message) {
-    //         free(res);
-    //
-    //         return NULL;
-    //       }
-    //
-    //       return res;
-    //     }
-    //
-    //     const cli_flag_state_t *fs = found.flag;
-    //
-    //     switch (fs->meta->type) {
-    //     case FLAG_TYPE_BOOL: {
-    //       if (fs->value_source == FLAG_VALUE_SOURCE_CLI) {
-    //         res->code = FLAGS_PARSING_DUPLICATE_FLAG;
-    //
-    //         char *pattern = flag_search_get_pattern(&found);
-    //         if (!pattern) {
-    //           free(res);
-    //
-    //           return NULL;
-    //         }
-    //
-    //         str_add_f(&res->message, "duplicate boolean flag: %s", pattern);
-    //         free(pattern);
-    //         if (!res->message) {
-    //           free(res);
-    //
-    //           return NULL;
-    //         }
-    //
-    //         return res;
-    //       }
-    //
-    //       if (value_start && !value_present) {
-    //         res->code = FLAGS_PARSING_MISSING_VALUE;
-    //
-    //         char *pattern = flag_search_get_pattern(&found);
-    //         if (!pattern) {
-    //           free(res);
-    //
-    //           return NULL;
-    //         }
-    //
-    //         str_add_f(&res->message, "missing value for boolean flag %s",
-    //         pattern); free(pattern); if (!res->message) {
-    //           free(res);
-    //
-    //           return NULL;
-    //         }
-    //
-    //         return res;
-    //       }
-    //
-    //       // for --bool-flag=true|false|yes|no|1|0 syntax
-    //       if (value_present) {
-    //         const bool_parsing_result_t parsed_bool =
-    //             parse_bool_value(value_start);
-    //         if (parsed_bool.error) {
-    //           res->code = FLAGS_PARSING_INVALID_VALUE;
-    //           str_add_f(&res->message, "invalid value for boolean flag %s",
-    //           arg); if (!res->message) {
-    //             free(res);
-    //
-    //             return NULL;
-    //           }
-    //
-    //           return res;
-    //         }
-    //
-    //         cli_internal_set_flag_value_bool(fs, parsed_bool.value);
-    //       } else {
-    //         // for --bool-flag presence syntax
-    //         cli_internal_set_flag_value_bool(fs, true); // presence sets to
-    //         true
-    //       }
-    //
-    //       fs->value_source = FLAG_VALUE_SOURCE_CLI;
-    //
-    //       continue;
-    //     }
-    //
-    //     case FLAG_TYPE_STRING: {
-    //       const char *value =
-    //           value_present ? value_start : (argv[i + 1] ? argv[i + 1] :
-    //           NULL);
-    //
-    //       printf("===>>> %s\n", value);
-    //
-    //       if (!value) {
-    //         res->code = FLAGS_PARSING_MISSING_VALUE;
-    //         str_add_f(&res->message, "missing value for flag %s", arg);
-    //         if (!res->message) {
-    //           free(res);
-    //
-    //           return NULL;
-    //         }
-    //
-    //         return res;
-    //       }
-    //
-    //       if (fs->value_source == FLAG_VALUE_SOURCE_CLI) {
-    //         res->code = FLAGS_PARSING_DUPLICATE_FLAG;
-    //         str_add_f(&res->message, "duplicate flag: %s", arg);
-    //         if (!res->message) {
-    //           free(res);
-    //
-    //           return NULL;
-    //         }
-    //
-    //         return res;
-    //       }
-    //
-    //       if (!validate_no_crlf(value)) {
-    //         res->code = FLAGS_PARSING_INVALID_VALUE;
-    //         str_add_f(&res->message, "invalid characters in value for flag
-    //         %s",
-    //                   arg);
-    //         if (!res->message) {
-    //           free(res);
-    //
-    //           return NULL;
-    //         }
-    //
-    //         return res;
-    //       }
-    //
-    //       if (!cli_internal_set_flag_value_string(fs, value)) {
-    //         free(res);
-    //
-    //         return NULL; // allocation failure setting value for flag
-    //       }
-    //
-    //       fs->value_source = FLAG_VALUE_SOURCE_CLI;
-    //
-    //       if (!value_present) {
-    //         i++; // consume next arg
-    //       }
-    //
-    //       continue;
-    //     }
-    //
-    //     case FLAG_TYPE_STRINGS: {
-    //       const char *value =
-    //           value_present ? value_start : (argv[i + 1] ? argv[i + 1] :
-    //           NULL);
-    //
-    //       if (!value) {
-    //         res->code = FLAGS_PARSING_MISSING_VALUE;
-    //         str_add_f(&res->message, "missing value for flag %s", arg);
-    //         if (!res->message) {
-    //           free(res);
-    //
-    //           return NULL;
-    //         }
-    //
-    //         return res;
-    //       }
-    //
-    //       // in case if the flag was previously set by env var or default,
-    //       // clear existing strings
-    //       if (fs->value_source != FLAG_VALUE_SOURCE_CLI) {
-    //         cli_internal_clear_flag_strings(fs);
-    //
-    //         fs->value_source = FLAG_VALUE_SOURCE_CLI;
-    //       }
-    //
-    //       if (!validate_no_crlf(value)) {
-    //         res->code = FLAGS_PARSING_INVALID_VALUE;
-    //         str_add_f(&res->message, "invalid characters in value for flag
-    //         %s",
-    //                   arg);
-    //         if (!res->message) {
-    //           free(res);
-    //
-    //           return NULL;
-    //         }
-    //
-    //         return res;
-    //       }
-    //
-    //       if (!cli_internal_add_flag_value_strings(fs, value)) {
-    //         free(res);
-    //
-    //         return NULL; // allocation failure adding value for flag
-    //       }
-    //
-    //       if (!value_present) {
-    //         i++; // consume next arg
-    //       }
-    //
-    //       continue;
-    //     }
-    //
-    //     default: {
-    //       res->code = FLAGS_PARSING_UNKNOWN_FLAG;
-    //       str_add_f(&res->message,
-    //                 "internal error: unknown flag type for flag: %s", arg);
-    //       if (!res->message) {
-    //         free(res);
-    //
-    //         return NULL;
-    //       }
-    //
-    //       return res;
-    //     }
-    //     }
-    //   }
-    //
-    //   // positional argument - copy it to args list
-    //   if (app->args.count >= SIZE_MAX / sizeof(char *) - 1) {
-    //     free(res);
-    //
-    //     return NULL;
-    //   }
-    //
-    //   // allocate new list with increased size
-    //   char **new_list =
-    //       realloc(app->args.list, sizeof(char *) * (app->args.count + 1));
-    //   if (!new_list) {
-    //     free(res);
-    //
-    //     return NULL; // allocation failure adding positional argument
-    //   }
-    //
-    //   app->args.list = new_list;
-    //
-    //   app->args.list[app->args.count] = strdup(arg);
-    //   if (!app->args.list[app->args.count]) {
-    //     free(res);
-    //
-    //     return NULL; // allocation failure duplicating positional argument
-    //   }
-    //
-    //   app->args.count++;
+        continue;
+      }
+
+      const flag_search_result_t found = app_find_flag(app, arg);
+      if (!found.flag) {
+        res = new_args_parsing_result(FLAGS_PARSING_UNKNOWN_FLAG,
+                                      "unknown flag: %s", arg);
+        if (!res) {
+          return NULL;
+        }
+
+        return res;
+      }
+
+      cli_flag_state_t *fs = found.flag;
+
+      switch (fs->meta->type) {
+      case FLAG_TYPE_BOOL: {
+        // check for duplicate
+        if (fs->value_source == FLAG_VALUE_SOURCE_CLI) {
+          char *pattern = flag_search_get_pattern(&found);
+          if (!pattern) {
+            return NULL; // pattern allocation failure
+          }
+
+          res = new_args_parsing_result(FLAGS_PARSING_DUPLICATE_FLAG,
+                                        "duplicate boolean flag: %s", pattern);
+          free(pattern);
+          if (!res) {
+            return NULL;
+          }
+
+          return res;
+        }
+
+        // mark as set from CLI
+        fs->value_source = FLAG_VALUE_SOURCE_CLI;
+
+        // set the boolean value
+        if (!flag_search_has_value(&found)) {
+          // for simple --bool-flag form
+          cli_internal_set_flag_value_bool(fs, true);
+        } else {
+          // for --bool-flag=true|false|yes|no|1|0 syntax
+          char *value = flag_search_get_value(&found);
+          const bool_parsing_result_t parsed_bool = parse_bool_value(value);
+
+          if (parsed_bool.error) {
+            char *pattern = flag_search_get_pattern(&found);
+            if (!pattern) {
+              free(value);
+
+              return NULL; // pattern allocation failure
+            }
+
+            res = new_args_parsing_result(
+                FLAGS_PARSING_INVALID_VALUE,
+                "invalid value [%s] for boolean flag %s", value, pattern);
+            free(value);
+            free(pattern);
+            if (!res) {
+              return NULL;
+            }
+
+            return res;
+          }
+
+          cli_internal_set_flag_value_bool(fs, parsed_bool.value);
+
+          free(value);
+        }
+
+        continue; // go to next arg
+      }
+
+      case FLAG_TYPE_STRING: {
+        // check for duplicate
+        if (fs->value_source == FLAG_VALUE_SOURCE_CLI) {
+          char *pattern = flag_search_get_pattern(&found);
+          if (!pattern) {
+            return NULL; // pattern allocation failure
+          }
+
+          res = new_args_parsing_result(FLAGS_PARSING_DUPLICATE_FLAG,
+                                        "duplicate flag: %s", pattern);
+          free(pattern);
+          if (!res) {
+            return NULL;
+          }
+
+          return res;
+        }
+
+        // mark as set from CLI
+        fs->value_source = FLAG_VALUE_SOURCE_CLI;
+
+        const bool has_value = flag_search_has_value(&found);
+        char *value = has_value
+                          ? flag_search_get_value(&found)
+                          : ((size_t)argc > i + 1 ? strdup(argv[++i]) : NULL);
+
+        // flag has no value OR value allocation failed
+        if (!value) {
+          char *pattern = flag_search_get_pattern(&found);
+          if (!pattern) {
+            return NULL; // pattern allocation failure
+          }
+
+          res = new_args_parsing_result(FLAGS_PARSING_MISSING_VALUE,
+                                        "missing value for flag %s", pattern);
+          free(pattern);
+          if (!res) {
+            return NULL;
+          }
+
+          return res;
+        }
+
+        if (!validate_no_crlf(value)) {
+          char *pattern = flag_search_get_pattern(&found);
+          if (!pattern) {
+            free(value);
+
+            return NULL; // pattern allocation failure
+          }
+
+          res = new_args_parsing_result(
+              FLAGS_PARSING_INVALID_VALUE,
+              "invalid characters in value for flag %s", pattern);
+          free(pattern);
+          free(value);
+          if (!res) {
+            return NULL;
+          }
+
+          return res;
+        }
+
+        if (!cli_internal_set_flag_value_string(fs, value)) {
+          free(value);
+
+          return NULL; // allocation failure setting value for flag
+        }
+
+        free(value);
+
+        continue; // go to next arg
+      }
+
+      case FLAG_TYPE_STRINGS: {
+        const bool has_value = flag_search_has_value(&found);
+        char *value = has_value
+                          ? flag_search_get_value(&found)
+                          : ((size_t)argc > i + 1 ? strdup(argv[++i]) : NULL);
+
+        // flag has no value OR value allocation failed
+        if (!value) {
+          char *pattern = flag_search_get_pattern(&found);
+          if (!pattern) {
+            return NULL; // pattern allocation failure
+          }
+
+          res = new_args_parsing_result(FLAGS_PARSING_MISSING_VALUE,
+                                        "missing value for flag %s", pattern);
+          free(pattern);
+          if (!res) {
+            return NULL;
+          }
+
+          return res;
+        }
+
+        // in case if the flag was previously set by env var or default,
+        // clear existing strings
+        if (fs->value_source != FLAG_VALUE_SOURCE_CLI) {
+          cli_internal_clear_flag_strings(fs);
+
+          fs->value_source = FLAG_VALUE_SOURCE_CLI;
+        }
+
+        if (!validate_no_crlf(value)) {
+          char *pattern = flag_search_get_pattern(&found);
+          if (!pattern) {
+            free(value);
+
+            return NULL; // pattern allocation failure
+          }
+
+          res = new_args_parsing_result(
+              FLAGS_PARSING_INVALID_VALUE,
+              "invalid characters in value for flag %s", pattern);
+          free(pattern);
+          free(value);
+          if (!res) {
+            return NULL;
+          }
+
+          return res;
+        }
+
+        if (!cli_internal_add_flag_value_strings(fs, value)) {
+          free(value);
+          free(res);
+
+          return NULL; // allocation failure adding value for flag
+        }
+
+        free(value);
+
+        continue; // go to next arg
+      }
+
+      default: {
+        char *pattern = flag_search_get_pattern(&found);
+        if (!pattern) {
+          return NULL; // pattern allocation failure
+        }
+
+        res = new_args_parsing_result(
+            FLAGS_PARSING_UNKNOWN_FLAG,
+            "internal error: unknown flag type for flag %s", pattern);
+        free(pattern);
+        if (!res) {
+          return NULL;
+        }
+
+        return res;
+      }
+      }
+    }
+
+    // no more flags to parse, copy arg as positional
+    {
+      const size_t need_size = (size_t)argc - i;
+
+      // free existing args if any
+      if (app->args.list) {
+        for (size_t j = 0; j < app->args.count; j++) {
+          free(app->args.list[j]);
+        }
+
+        free(app->args.list);
+        app->args.list = NULL;
+        app->args.count = 0;
+      }
+
+      app->args.count = need_size;
+
+      // allocate new args list
+      app->args.list = malloc(sizeof(char *) * need_size);
+      if (!app->args.list) {
+        return NULL; // allocation failure
+      }
+
+      // copy remaining args
+      for (size_t j = 0; j < need_size; j++) {
+        app->args.list[j] = strdup(argv[i + j]);
+        if (!app->args.list[j]) {
+          // free previously allocated args
+          for (size_t k = 0; k < j; k++) {
+            free(app->args.list[k]);
+          }
+
+          free(app->args.list);
+          app->args.list = NULL;
+          app->args.count = 0;
+
+          return NULL; // allocation failure
+        }
+      }
+    }
+
+    break; // we're done parsing args
   }
 
   res = new_args_parsing_result(FLAGS_PARSING_OK, NULL);
