@@ -262,6 +262,11 @@ static bool set_nonblocking(const int sockfd) {
  * Returns true on success, false on failure.
  */
 static bool resolve_host(const char *host, struct in_addr *addr) {
+  // check for interruption before starting
+  if (interrupted) {
+    return false;
+  }
+
   // try to parse as IPv4 address first
   if (inet_pton(AF_INET, host, addr) == 1) {
     return true;
@@ -276,6 +281,16 @@ static bool resolve_host(const char *host, struct in_addr *addr) {
   hints.ai_socktype = SOCK_STREAM; // TCP
 
   const int addr_info = getaddrinfo(host, NULL, &hints, &result_addr);
+
+  // check for interruption after potentially blocking call
+  if (interrupted) {
+    if (result_addr != NULL) {
+      freeaddrinfo(result_addr);
+    }
+
+    return false;
+  }
+
   if (addr_info != 0) {
     return false;
   }
@@ -311,6 +326,11 @@ static bool resolve_host(const char *host, struct in_addr *addr) {
  * Returns true if connected, false on timeout or error.
  */
 static bool wait_for_connect(const int sockfd, const int timeout_sec) {
+  // check for interruption before starting
+  if (interrupted) {
+    return false;
+  }
+
   fd_set write_fds;
   fd_set error_fds;
   struct timeval timeout;
@@ -324,6 +344,11 @@ static bool wait_for_connect(const int sockfd, const int timeout_sec) {
   timeout.tv_usec = 0;
 
   const int ret = select(sockfd + 1, NULL, &write_fds, &error_fds, &timeout);
+
+  // check for interruption immediately after select
+  if (interrupted) {
+    return false;
+  }
 
   if (ret <= 0) {
     return false;
@@ -367,6 +392,11 @@ static bool wait_for_connect(const int sockfd, const int timeout_sec) {
  */
 static bool check_tcp_port(const struct in_addr addr, const int port,
                            const int timeout_sec) {
+  // check for interruption before starting
+  if (interrupted) {
+    return false;
+  }
+
   // create socket
   const int sockfd = socket(AF_INET, SOCK_STREAM, 0);
   if (sockfd < 0) {
@@ -375,6 +405,8 @@ static bool check_tcp_port(const struct in_addr addr, const int port,
 
   // set non-blocking mode
   if (!set_nonblocking(sockfd)) {
+    close(sockfd);
+
     return false;
   }
 
@@ -386,6 +418,13 @@ static bool check_tcp_port(const struct in_addr addr, const int port,
   server_addr.sin_port = htons((uint16_t)port);
   server_addr.sin_addr = addr;
 
+  // check for interruption before connect attempt
+  if (interrupted) {
+    close(sockfd);
+
+    return false;
+  }
+
   // attempt connection
   const int ret =
       connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr));
@@ -396,6 +435,9 @@ static bool check_tcp_port(const struct in_addr addr, const int port,
     if (errno == EINPROGRESS) {
       // connection in progress - wait for completion
       success = wait_for_connect(sockfd, timeout_sec);
+    } else if (errno == EINTR) {
+      // interrupted during connect
+      success = false;
     }
   } else {
     // connection succeeded immediately (unlikely but possible)
@@ -415,6 +457,11 @@ static bool check_tcp_port(const struct in_addr addr, const int port,
  */
 static bool check_udp_port(const struct in_addr addr, const int port,
                            const int timeout_sec) {
+  // check for interruption before starting
+  if (interrupted) {
+    return false;
+  }
+
   // create socket
   const int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
   if (sockfd < 0) {
@@ -442,12 +489,26 @@ static bool check_udp_port(const struct in_addr addr, const int port,
     return false;
   }
 
+  // check for interruption before setting timeout
+  if (interrupted) {
+    close(sockfd);
+
+    return false;
+  }
+
   // set socket receive timeout
   struct timeval tv;
   tv.tv_sec = timeout_sec;
   tv.tv_usec = 0;
 
   if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+    close(sockfd);
+
+    return false;
+  }
+
+  // check for interruption before sending
+  if (interrupted) {
     close(sockfd);
 
     return false;
@@ -475,6 +536,13 @@ static bool check_udp_port(const struct in_addr addr, const int port,
 
   const int ret = select(sockfd + 1, &read_fds, NULL, NULL, &timeout);
 
+  // check for interruption immediately after select
+  if (interrupted) {
+    close(sockfd);
+
+    return false;
+  }
+
   if (ret < 0) {
     close(sockfd);
 
@@ -491,6 +559,14 @@ static bool check_udp_port(const struct in_addr addr, const int port,
 
   // try to receive - check for both data and ICMP errors
   const ssize_t received = recv(sockfd, buffer, sizeof(buffer), 0);
+
+  // check for interruption after recv
+  if (interrupted) {
+    close(sockfd);
+
+    return false;
+  }
+
   if (received > 0) {
     // received data - port is definitely open
     close(sockfd);
@@ -506,7 +582,7 @@ static bool check_udp_port(const struct in_addr addr, const int port,
       return false;
     }
 
-    if (errno == EINTR && interrupted) {
+    if (errno == EINTR) {
       close(sockfd);
 
       return false;
@@ -779,7 +855,7 @@ int main(const int argc, const char *argv[]) {
     goto cleanup;
   }
 
-  // check for interruption
+  // check for interruption before expensive operations
   if (interrupted) {
     fputs(ERR_INTERRUPTED, stderr);
 
@@ -788,7 +864,18 @@ int main(const int argc, const char *argv[]) {
 
   struct in_addr addr;
   if (!resolve_host(host_value, &addr)) {
-    fputs(ERR_FAILED_TO_RESOLVE_HOST, stderr);
+    if (interrupted) {
+      fputs(ERR_INTERRUPTED, stderr);
+    } else {
+      fputs(ERR_FAILED_TO_RESOLVE_HOST, stderr);
+    }
+
+    goto cleanup;
+  }
+
+  // check for interruption before port check
+  if (interrupted) {
+    fputs(ERR_INTERRUPTED, stderr);
 
     goto cleanup;
   }
