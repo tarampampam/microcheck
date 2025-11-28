@@ -1,3 +1,5 @@
+// file: cli.c
+
 #include "cli.h"
 #include "cli_flag.h"
 
@@ -76,7 +78,10 @@ cli_flag_state_t *cli_app_add_flag(cli_app_state_t *app,
     return NULL;
   }
 
-  if (app->flags.count >= SIZE_MAX / sizeof(cli_flag_state_t *) - 1) {
+  // check for overflow - ensure count + 1 won't overflow and allocation size is
+  // safe
+  if (app->flags.count >= SIZE_MAX - 1 ||
+      app->flags.count + 1 > SIZE_MAX / sizeof(cli_flag_state_t *)) {
     cli_internal_free_flag_state(fs);
 
     return NULL;
@@ -539,6 +544,10 @@ cli_app_parse_args(cli_app_state_t *app, const char *argv[], const int argc) {
         } else {
           // for --bool-flag=true|false|yes|no|1|0 syntax
           char *value = flag_search_get_value(&found);
+          if (!value) {
+            return NULL; // allocation failure
+          }
+
           const bool_parsing_result_t parsed_bool = parse_bool_value(value);
 
           if (parsed_bool.error) {
@@ -696,7 +705,6 @@ cli_app_parse_args(cli_app_state_t *app, const char *argv[], const int argc) {
 
         if (!cli_internal_add_flag_value_strings(fs, value)) {
           free(value);
-          free(res);
 
           return NULL; // allocation failure adding value for flag
         }
@@ -745,6 +753,8 @@ cli_app_parse_args(cli_app_state_t *app, const char *argv[], const int argc) {
       // allocate new args list
       app->args.list = malloc(sizeof(char *) * need_size);
       if (!app->args.list) {
+        app->args.count = 0; // reset count on allocation failure
+
         return NULL; // allocation failure
       }
 
