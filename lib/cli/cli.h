@@ -180,12 +180,12 @@ void free_cli_args_parsing_result(cli_args_parsing_result_t *);
 cli_args_parsing_result_t *cli_app_parse_args(cli_app_state_t *,
                                               const char *argv[], int argc);
 
-#ifndef COMMAND_PARSE_MAX_ARGS
-#define COMMAND_PARSE_MAX_ARGS 256 // Maximum number of arguments per command
+#ifndef CLI_COMMAND_PARSE_MAX_ARGS
+#define CLI_COMMAND_PARSE_MAX_ARGS 256 // Maximum number of arguments per command
 #endif
 
-#ifndef COMMAND_PARSE_MAX_ARG_LEN
-#define COMMAND_PARSE_MAX_ARG_LEN 4096
+#ifndef CLI_COMMAND_PARSE_MAX_ARG_LEN
+#define CLI_COMMAND_PARSE_MAX_ARG_LEN 4096
 #endif
 
 /**

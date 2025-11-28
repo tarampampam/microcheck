@@ -50,7 +50,7 @@ set_parse_error(cli_command_parsing_result_t *result, char *temp_buffer,
  */
 static bool save_argument(cli_command_parsing_result_t *result,
                           const char *arg_buffer, const size_t arg_len) {
-  if (result->argc >= COMMAND_PARSE_MAX_ARGS) {
+  if (result->argc >= CLI_COMMAND_PARSE_MAX_ARGS) {
     result->code = COMMAND_PARSING_TOO_MANY_ARGS;
 
     return false;
@@ -111,14 +111,14 @@ cli_command_parsing_result_t *cli_parse_command_string(const char *str) {
   }
 
   // allocate argv array (NULL-terminated)
-  result->argv = calloc(COMMAND_PARSE_MAX_ARGS + 1, sizeof(char *));
+  result->argv = calloc(CLI_COMMAND_PARSE_MAX_ARGS + 1, sizeof(char *));
   if (!result->argv) {
     free(result);
     return NULL;
   }
 
   // allocate temporary buffer for building arguments
-  char *arg_buffer = malloc(COMMAND_PARSE_MAX_ARG_LEN);
+  char *arg_buffer = malloc(CLI_COMMAND_PARSE_MAX_ARG_LEN);
   if (!arg_buffer) {
     free(result->argv);
     free(result);
@@ -139,7 +139,7 @@ cli_command_parsing_result_t *cli_parse_command_string(const char *str) {
 
     /* Handle escape sequences */
     if (escaped) {
-      if (arg_len >= COMMAND_PARSE_MAX_ARG_LEN - 1) {
+      if (arg_len >= CLI_COMMAND_PARSE_MAX_ARG_LEN - 1) {
         return set_parse_error(result, arg_buffer,
                                COMMAND_PARSING_ARG_TOO_LONG);
       }
@@ -205,7 +205,7 @@ cli_command_parsing_result_t *cli_parse_command_string(const char *str) {
     }
 
     // regular character
-    if (arg_len >= COMMAND_PARSE_MAX_ARG_LEN - 1) {
+    if (arg_len >= CLI_COMMAND_PARSE_MAX_ARG_LEN - 1) {
       return set_parse_error(result, arg_buffer, COMMAND_PARSING_ARG_TOO_LONG);
     }
 
