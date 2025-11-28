@@ -337,6 +337,13 @@ int main(const int argc, const char *argv[]) {
   const cli_flag_state_t *proc_pid_env_flag =
       cli_app_add_flag(app, &PROCESS_PID_ENV_FLAG_META);
 
+  if (!help_flag || !pidfile_flag || !pidfile_env_flag || !proc_pid_flag ||
+      !proc_pid_env_flag) {
+    fputs(ERR_ALLOCATION_FAILED, stderr);
+
+    goto cleanup;
+  }
+
   // skip argv[0] by moving the pointer and decreasing argc
   const char **args = argv + 1;
   const int argn = (argc > 0) ? argc - 1 : 0;

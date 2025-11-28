@@ -678,6 +678,13 @@ int main(const int argc, const char *argv[]) {
   const cli_flag_state_t *timeout_env_flag =
       cli_app_add_flag(app, &TIMEOUT_ENV_FLAG_META);
 
+  if (!help_flag || !tcp_flag || !udp_flag || !host_env_flag || !port_flag ||
+      !port_env_flag || !timeout_flag || !timeout_env_flag) {
+    fputs(ERR_ALLOCATION_FAILED, stderr);
+
+    goto cleanup;
+  }
+
   // skip argv[0] by moving the pointer and decreasing argc
   const char **args = argv + 1;
   const int argn = (argc > 0) ? argc - 1 : 0;

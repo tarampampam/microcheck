@@ -79,7 +79,7 @@ build/bin/portcheck: apps/portcheck.c apps/version.h
 
 build/bin/parallel: apps/parallel.c apps/version.h
 	mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -o $@ $<
+	$(CC) $(CFLAGS) -o $@ $< build/lib/cli.a
 	strip $(STRIP_FLAGS) $@
 
 build/bin/pidcheck: apps/pidcheck.c apps/version.h build/lib/cli.a

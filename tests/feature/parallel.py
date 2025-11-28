@@ -316,7 +316,7 @@ def get_test_cases() -> List[TestCase]:
             name="Error: Only empty strings",
             give_args=["", ""],
             want_exit_code=1,
-            want_stderr_contains="no valid commands",
+            want_stderr_contains="no commands specified",
         ),
 
         # Argument parsing - basic
@@ -523,7 +523,7 @@ def get_test_cases() -> List[TestCase]:
             name="Jobs: Missing -j argument",
             give_args=["-j"],
             want_exit_code=1,
-            want_stderr_contains="requires an argument",
+            want_stderr_contains="missing value for flag -j",
         ),
 
         # Error propagation
