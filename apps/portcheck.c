@@ -784,7 +784,7 @@ int main(const int argc, const char *argv[]) {
     fputs(ERR_INTERRUPTED, stderr);
 
     goto cleanup;
-  // }
+  }
 
   struct in_addr addr;
   if (!resolve_host(host_value, &addr)) {
