@@ -6,6 +6,8 @@
  * Returns exit code 0 if process exists, 1 otherwise.
  */
 
+// NOTE for me in the future: do not use `fprintf` to keep result binary small
+
 #include "../lib/cli/cli.h"
 #include "version.h"
 #include <ctype.h>
@@ -98,25 +100,24 @@ static const cli_flag_meta_t PROCESS_PID_ENV_FLAG_META = {
     .type = FLAG_TYPE_STRING,
 };
 
-static const char *err_allocation_failed = "Error: memory allocation failed\n";
-static const char *err_unknown_parsing_error =
-    "Error: unknown error parsing flags\n";
-static const char *err_neither_pid_nor_file =
-    "Error: either PID or PID file path is required\n"
-    "  Use --" FLAG_PID_FILE_LONG
-    " to specify PID file path, or --" FLAG_PROC_PID_LONG " for PID directly\n";
-static const char *err_both_pid_and_file =
-    "Error: --" FLAG_PID_FILE_LONG " and --" FLAG_PROC_PID_LONG
-    " cannot be used together\n";
-static const char *err_interrupted = "Error: operation interrupted by signal\n";
-static const char *err_failed_to_read_pid_file =
-    "Error: failed to read PID from file\n";
-static const char *err_invalid_pid_format = "Error: invalid PID format\n";
-static const char *err_pid_cannot_be_empty = "Error: PID cannot be empty\n";
-static const char *err_pid_file_path_cannot_be_empty =
-    "Error: PID file path cannot be empty\n";
-static const char *err_too_long_pid_file_path =
-    "Error: PID file path is too long\n";
+#define ERR_FAILED_TO_SETUP_SIG_HANDLER "Error: failed to setup SIGINT handler"
+#define ERR_ALLOCATION_FAILED "Error: memory allocation failed\n"
+#define ERR_UNKNOWN_PARSING_ERROR "unknown parsing flags error\n"
+#define ERR_NEITHER_PID_NOR_FILE                                               \
+  "Error: either PID or PID file path is required\n"                           \
+  "  Use --" FLAG_PID_FILE_LONG                                                \
+  " to specify PID file path, or --" FLAG_PROC_PID_LONG " for PID directly\n"
+#define ERR_BOTH_PID_AND_FILE                                                  \
+  "Error: --" FLAG_PID_FILE_LONG " and --" FLAG_PROC_PID_LONG                  \
+  " cannot be used together\n"
+#define ERR_INTERRUPTED "Error: operation interrupted by signal\n"
+#define ERR_FAILED_TO_READ_PID_FILE                                            \
+  "Error: failed to read PID from file (file not "                             \
+  "exists/inaccessible/empty/invalid format)\n"
+#define ERR_INVALID_PID_FORMAT "Error: invalid PID format"
+#define ERR_PID_CANNOT_BE_EMPTY "Error: PID cannot be empty\n"
+#define ERR_PID_FILE_CANNOT_BE_EMPTY "Error: PID file path cannot be empty\n"
+#define ERR_TOO_LONG_PID_FILE_PATH "Error: PID file path is too long\n"
 
 /* Global flag for signal handling - volatile ensures visibility across signal
  * handler */
@@ -144,16 +145,10 @@ static bool setup_signal_handlers(void) {
   sa.sa_flags = 0; // no SA_RESTART - we want EINTR on blocking calls
 
   if (sigaction(SIGINT, &sa, NULL) < 0) {
-    fprintf(stderr, "Error: failed to setup SIGINT handler: %s\n",
-            strerror(errno));
-
     return false;
   }
 
   if (sigaction(SIGTERM, &sa, NULL) < 0) {
-    fprintf(stderr, "Error: failed to setup SIGTERM handler: %s\n",
-            strerror(errno));
-
     return false;
   }
 
@@ -195,7 +190,7 @@ static bool validate_and_convert_pid(const char *str, pid_t *pid) {
   // parse the number
   char *endptr;
   errno = 0;
-  long val = strtol(str, &endptr, 10);
+  const long val = strtol(str, &endptr, 10);
 
   // check for conversion errors
   if (errno == ERANGE || endptr == str) {
@@ -214,8 +209,6 @@ static bool validate_and_convert_pid(const char *str, pid_t *pid) {
 
   // validate PID range
   if (val < MIN_PID || val > MAX_PID) {
-    fprintf(stderr, "Error: PID %ld is outside valid range (%d-%d)\n", val,
-            MIN_PID, MAX_PID);
     return false;
   }
 
@@ -227,31 +220,27 @@ static bool validate_and_convert_pid(const char *str, pid_t *pid) {
 /**
  * Read PID from file.
  * Returns true if PID successfully read, false otherwise.
+ * On failure, sets errno to indicate the error.
  */
 static bool read_pid_from_file(const char *filepath, pid_t *pid) {
   if (filepath == NULL || pid == NULL) {
-    fprintf(stderr, "Error: invalid arguments to read_pid_from_file\n");
-
     return false;
   }
 
   FILE *fp = fopen(filepath, "r");
   if (fp == NULL) {
-    fprintf(stderr, "Error: failed to open PID file '%s': %s\n", filepath,
-            strerror(errno));
-
     return false;
   }
 
   char buffer[256];
-  if (fgets(buffer, (int)sizeof(buffer), fp) == NULL) {
+  if (fgets(buffer, sizeof(buffer), fp) == NULL) {
     if (ferror(fp)) {
-      fprintf(stderr, "Error: failed to read PID file '%s': %s\n", filepath,
-              strerror(errno));
-    } else {
-      fprintf(stderr, "Error: PID file '%s' is empty\n", filepath);
+      fclose(fp);
+
+      return false;
     }
 
+    // Empty file
     fclose(fp);
 
     return false;
@@ -260,8 +249,6 @@ static bool read_pid_from_file(const char *filepath, pid_t *pid) {
   fclose(fp);
 
   if (!validate_and_convert_pid(buffer, pid)) {
-    fprintf(stderr, "Error: invalid PID format in file '%s'\n", filepath);
-
     return false;
   }
 
@@ -272,17 +259,15 @@ static bool read_pid_from_file(const char *filepath, pid_t *pid) {
  * Check if process with given PID exists.
  * Returns true if process exists, false otherwise.
  */
-static bool check_process_exists(pid_t pid) {
+static bool check_process_exists(const pid_t pid) {
   // validate PID before checking
   if (pid < MIN_PID || pid > MAX_PID) {
-    fprintf(stderr, "Error: invalid PID %d\n", (int)pid);
-
     return false;
   }
 
   // use kill(pid, 0) to check if process exists
   // this is a standard POSIX way to check process existence
-  // it returns 0 if process exists and we have permission to signal it,
+  // it returns 0 if process exists, and we have permission to signal it,
   // or -1 with errno set appropriately
   if (kill(pid, 0) == 0) {
     return true;
@@ -290,26 +275,22 @@ static bool check_process_exists(pid_t pid) {
 
   if (errno == ESRCH) {
     // process does not exist
-    fprintf(stderr, "Error: process with PID %d does not exist\n", (int)pid);
-
-    return false;
-  } else if (errno == EPERM) {
-    // process exists but we don't have permission to signal it
-    // for healthcheck purposes, we consider this as "process exists"
-    return true;
-  } else if (errno == EINVAL) {
-    // invalid signal (shouldn't happen with signal 0)
-    fprintf(stderr, "Error: invalid signal when checking process %d\n",
-            (int)pid);
-
-    return false;
-  } else {
-    // other error
-    fprintf(stderr, "Error: failed to check process %d: %s\n", (int)pid,
-            strerror(errno));
-
     return false;
   }
+
+  if (errno == EPERM) {
+    // process exists, but we don't have permission to signal it
+    // for healthcheck purposes, we consider this as "process exists"
+    return true;
+  }
+
+  if (errno == EINVAL) {
+    // invalid signal (shouldn't happen with signal 0)
+    return false;
+  }
+
+  // other error
+  return false;
 }
 
 /**
@@ -318,6 +299,11 @@ static bool check_process_exists(pid_t pid) {
 int main(const int argc, const char *argv[]) {
   // setup signal handlers
   if (!setup_signal_handlers()) {
+    fputs(ERR_FAILED_TO_SETUP_SIG_HANDLER, stderr);
+    fputs(": ", stderr);
+    fputs(strerror(errno), stderr);
+    fputc('\n', stderr);
+
     return EXIT_FAILURE_CODE;
   }
 
@@ -354,7 +340,7 @@ int main(const int argc, const char *argv[]) {
   if (parsing_result->code != FLAGS_PARSING_OK) {
     fputs("Error: ", stderr);
     fputs(parsing_result->message ? parsing_result->message
-                                  : err_unknown_parsing_error,
+                                  : ERR_UNKNOWN_PARSING_ERROR,
           stderr);
     fputc('\n', stderr);
 
@@ -368,7 +354,7 @@ int main(const int argc, const char *argv[]) {
     if (cli_validate_env_name(pidfile_env_flag->value.string_value)) {
       pidfile_flag->env_variable = strdup(pidfile_env_flag->value.string_value);
       if (pidfile_flag->env_variable == NULL) {
-        fputs(err_allocation_failed, stderr);
+        fputs(ERR_ALLOCATION_FAILED, stderr);
 
         goto cleanup;
       }
@@ -383,7 +369,7 @@ int main(const int argc, const char *argv[]) {
       proc_pid_flag->env_variable =
           strdup(proc_pid_env_flag->value.string_value);
       if (proc_pid_flag->env_variable == NULL) {
-        fputs(err_allocation_failed, stderr);
+        fputs(ERR_ALLOCATION_FAILED, stderr);
 
         goto cleanup;
       }
@@ -401,7 +387,7 @@ int main(const int argc, const char *argv[]) {
     if (parsing_result->code != FLAGS_PARSING_OK) {
       fputs("Error: ", stderr);
       fputs(parsing_result->message ? parsing_result->message
-                                    : err_unknown_parsing_error,
+                                    : ERR_UNKNOWN_PARSING_ERROR,
             stderr);
       fputc('\n', stderr);
 
@@ -432,21 +418,21 @@ int main(const int argc, const char *argv[]) {
 
   // if NEITHER pid file NOR proc pid provided, error out
   if (!pid_file && !proc_pid) {
-    fputs(err_neither_pid_nor_file, stderr);
+    fputs(ERR_NEITHER_PID_NOR_FILE, stderr);
 
     goto cleanup;
   }
 
   // the same if BOTH pid file and proc pid provided
   if (pid_file && proc_pid) {
-    fputs(err_both_pid_and_file, stderr);
+    fputs(ERR_BOTH_PID_AND_FILE, stderr);
 
     goto cleanup;
   }
 
   // check for interruption
   if (interrupted) {
-    fputs(err_interrupted, stderr);
+    fputs(ERR_INTERRUPTED, stderr);
 
     goto cleanup;
   }
@@ -456,33 +442,33 @@ int main(const int argc, const char *argv[]) {
   if (pid_file) {
     const size_t pid_file_len = strlen(pid_file);
     if (pid_file_len == 0) {
-      fputs(err_pid_file_path_cannot_be_empty, stderr);
+      fputs(ERR_PID_FILE_CANNOT_BE_EMPTY, stderr);
 
       goto cleanup;
     }
 
     if (pid_file_len >= MAX_PATH_LEN) {
-      fputs(err_too_long_pid_file_path, stderr);
+      fputs(ERR_TOO_LONG_PID_FILE_PATH, stderr);
 
       goto cleanup;
     }
 
     // read PID from file
     if (!read_pid_from_file(pid_file, &pid_to_check)) {
-      fputs(err_failed_to_read_pid_file, stderr);
+      fputs(ERR_FAILED_TO_READ_PID_FILE, stderr);
 
       goto cleanup;
     }
   } else {
     if (strlen(proc_pid) == 0) {
-      fputs(err_pid_cannot_be_empty, stderr);
+      fputs(ERR_PID_CANNOT_BE_EMPTY, stderr);
 
       goto cleanup;
     }
 
     // validate and convert provided PID string
     if (!validate_and_convert_pid(proc_pid, &pid_to_check)) {
-      fputs(err_invalid_pid_format, stderr);
+      fputs(ERR_INVALID_PID_FORMAT, stderr);
       fputs(": '", stderr);
       fputs(proc_pid, stderr);
       fputs("'\n", stderr);
