@@ -14,7 +14,6 @@
 #include "../lib/cli/cli.h"
 #include "version.h"
 #include <errno.h>
-#include <limits.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -32,14 +31,11 @@
 /* Maximum number of commands */
 #define MAX_COMMANDS 128
 
-#define FLAG_JOBS_SHORT "j"
-#define FLAG_JOBS_LONG "jobs"
-
+/* Error messages */
 #define ERR_FAILED_TO_SETUP_SIG_HANDLER "Error: failed to setup signal handler"
 #define ERR_ALLOCATION_FAILED "Error: memory allocation failed\n"
 #define ERR_UNKNOWN_PARSING_ERROR "unknown parsing flags error\n"
 #define ERR_NO_COMMANDS_SPECIFIED "Error: no commands specified\n"
-#define ERR_INVALID_JOBS_VALUE "Error: jobs must be a positive integer\n"
 #define ERR_TOO_MANY_COMMANDS "Error: too many commands\n"
 #define ERR_NO_VALID_COMMANDS "Error: no valid commands specified\n"
 #define ERR_WAIT_FAILED "Error: wait failed"
@@ -68,8 +64,7 @@ static const cli_app_meta_t APP_META = {
         "or the exit code of the first failed command.\n\n"
 
         "Behavior:\n"
-        "  - All commands run in parallel (or limited by --" FLAG_JOBS_LONG
-        ")\n"
+        "  - All commands run in parallel\n"
         "  - If any command fails, all others are terminated\n"
         "  - Returns exit code of first failed command\n"
         "  - On SIGINT/SIGTERM, all commands are terminated and returns exit "
@@ -87,26 +82,15 @@ static const cli_app_meta_t APP_META = {
         "    - Single quotes preserve everything literally\n"
         "    - Double quotes allow escaping with backslash\n"
         "    - Adjacent quoted/unquoted parts are concatenated",
-    .usage = "[OPTIONS] COMMAND [COMMAND...]",
-    .examples =
-        "  # Run two simple commands in parallel\n"
-        "  " APP_NAME " whoami id\n\n"
+    .usage = "COMMAND [COMMAND...]",
+    .examples = "  # Run two simple commands in parallel\n"
+                "  " APP_NAME " whoami id\n\n"
 
-        "  # Run commands with arguments (quoted)\n"
-        "  " APP_NAME " \"echo hello\" \"echo world\"\n\n"
+                "  # Run commands with arguments (quoted)\n"
+                "  " APP_NAME " \"echo hello\" \"echo world\"\n\n"
 
-        "  # Mix quoted and unquoted commands\n"
-        "  " APP_NAME " whoami \"echo foo bar\"\n\n"
-
-        "  # Limit parallel execution to 2 jobs\n"
-        "  " APP_NAME " -" FLAG_JOBS_SHORT " 2 cmd1 cmd2 cmd3 cmd4\n\n"};
-
-static const cli_flag_meta_t JOBS_FLAG_META = {
-    .short_name = FLAG_JOBS_SHORT,
-    .long_name = FLAG_JOBS_LONG,
-    .description = "Limit number of parallel jobs (default: -1 = unlimited)",
-    .type = FLAG_TYPE_STRING,
-};
+                "  # Mix quoted and unquoted commands\n"
+                "  " APP_NAME " whoami \"echo foo bar\"\n"};
 
 /**
  * Parsed command structure.
@@ -120,27 +104,21 @@ typedef struct {
  * Running job information.
  */
 typedef struct {
-  pid_t pid;     /* Process ID */
-  pid_t pgid;    /* Process group ID */
-  int cmd_index; /* Index of command being executed */
+  pid_t pid;  /* Process ID */
+  pid_t pgid; /* Process group ID */
 } job_t;
 
 /**
  * Global runtime state structure.
  */
 typedef struct {
-  job_t *running_jobs;
-  int running_jobs_count;
-  int running_jobs_capacity;
+  job_t *jobs;
+  int jobs_count;
   volatile sig_atomic_t interrupted;
 } runtime_state_t;
 
 /* Global state for signal handling - needs to be global for signal handler */
 static runtime_state_t *g_state = NULL;
-
-/* Forward declarations */
-static void safe_kill(pid_t pid, int sig);
-static void safe_kill_group(pid_t pgid, int sig);
 
 /**
  * Signal handler for SIGINT and SIGTERM.
@@ -155,7 +133,6 @@ static void signal_handler(const int signum) {
 
   // Note: We don't kill processes here due to race conditions.
   // The main loop will handle killing jobs when it detects 'interrupted' flag.
-  // This is safer than accessing global data structures in signal handler.
 }
 
 /**
@@ -204,32 +181,6 @@ static bool unblock_signals(const sigset_t *oldset) {
   if (sigprocmask(SIG_SETMASK, oldset, NULL) < 0) {
     return false;
   }
-
-  return true;
-}
-
-/**
- * Validate and convert jobs string to integer.
- * Returns true if valid (positive integer), false otherwise.
- */
-static bool validate_and_convert_jobs(const char *str, int *jobs) {
-  if (str == NULL || jobs == NULL || *str == '\0') {
-    return false;
-  }
-
-  char *endptr;
-  errno = 0;
-  const long val = strtol(str, &endptr, 10);
-
-  if (errno != 0 || *endptr != '\0' || endptr == str) {
-    return false;
-  }
-
-  if (val < 1 || val > INT_MAX) {
-    return false;
-  }
-
-  *jobs = (int)val;
 
   return true;
 }
@@ -313,70 +264,6 @@ static CliCommandParsingErrorCode parse_command_string(const char *str,
 }
 
 /**
- * Add a running job to the tracking list.
- */
-static bool add_running_job(runtime_state_t *state, const pid_t pid,
-                            const pid_t pgid, const int cmd_index) {
-  if (state->running_jobs_count >= state->running_jobs_capacity) {
-    const int new_capacity = state->running_jobs_capacity == 0
-                                 ? 16
-                                 : state->running_jobs_capacity * 2;
-
-    // check for integer overflow in capacity calculation
-    if (new_capacity > INT_MAX / 2 ||
-        new_capacity < state->running_jobs_capacity) {
-      return false;
-    }
-
-    // check for size_t overflow in allocation
-    const size_t new_size = sizeof(job_t) * (size_t)new_capacity;
-
-    // basic sanity check - this should never trigger given capacity limit
-    if (new_size / sizeof(job_t) != (size_t)new_capacity) {
-      return false;
-    }
-
-    job_t *new_jobs = realloc(state->running_jobs, new_size);
-    if (!new_jobs) {
-      fputs(ERR_ALLOCATION_FAILED, stderr);
-
-      return false;
-    }
-
-    state->running_jobs = new_jobs;
-    state->running_jobs_capacity = new_capacity;
-  }
-
-  state->running_jobs[state->running_jobs_count].pid = pid;
-  state->running_jobs[state->running_jobs_count].pgid = pgid;
-  state->running_jobs[state->running_jobs_count].cmd_index = cmd_index;
-  state->running_jobs_count++;
-
-  return true;
-}
-
-/**
- * Remove a running job from the tracking list.
- * Returns true if job was found and removed, false otherwise.
- */
-static bool remove_running_job(runtime_state_t *state, const pid_t pid) {
-  for (int i = 0; i < state->running_jobs_count; i++) {
-    if (state->running_jobs[i].pid == pid) {
-      // shift remaining jobs
-      for (int j = i; j < state->running_jobs_count - 1; j++) {
-        state->running_jobs[j] = state->running_jobs[j + 1];
-      }
-
-      state->running_jobs_count--;
-
-      return true;
-    }
-  }
-
-  return false;
-}
-
-/**
  * Execute a single command in a child process.
  * Returns child PID on success, -1 on failure.
  */
@@ -424,33 +311,12 @@ static pid_t execute_command(const command_t *cmd) {
   // unblock signals after setpgid
   if (!unblock_signals(&oldset)) {
     // failed to unblock - kill child and return error
-    safe_kill(pid, SIGKILL);
+    kill(pid, SIGKILL);
 
     return -1;
   }
 
   return pid;
-}
-
-/**
- * Safe wrapper around kill() that validates PID.
- * Prevents accidental killing of critical processes.
- *
- * POSIX kill() behavior:
- * - pid > 0:  kill specific process
- * - pid == 0: kill all processes in current process group (DANGEROUS!)
- * - pid == -1: kill all processes user has permission for (VERY DANGEROUS!)
- * - pid < -1: kill all processes in process group |pid|
- */
-static void safe_kill(const pid_t pid, const int sig) {
-  // validate PID before killing
-  if (pid <= 0) {
-    fputs(ERR_INVALID_PID_KILL, stderr);
-
-    return;
-  }
-
-  kill(pid, sig);
 }
 
 /**
@@ -470,10 +336,10 @@ static void safe_kill_group(const pid_t pgid, const int sig) {
 /**
  * Kill all running job process groups.
  */
-static void kill_all_jobs(const runtime_state_t *state, const int signum) {
-  for (int i = 0; i < state->running_jobs_count; i++) {
-    if (state->running_jobs[i].pgid > 0) {
-      safe_kill_group(state->running_jobs[i].pgid, signum);
+static void kill_all_jobs(const runtime_state_t *state) {
+  for (int i = 0; i < state->jobs_count; i++) {
+    if (state->jobs[i].pgid > 0) {
+      safe_kill_group(state->jobs[i].pgid, SIGTERM);
     }
   }
 }
@@ -485,11 +351,11 @@ static void kill_all_jobs(const runtime_state_t *state, const int signum) {
 static void cleanup_all(runtime_state_t *state, command_t *commands,
                         const int num_commands) {
   // kill all running jobs
-  if (state && state->running_jobs_count > 0) {
-    kill_all_jobs(state, SIGTERM);
+  if (state && state->jobs && state->jobs_count > 0) {
+    kill_all_jobs(state);
 
     // wait for all jobs to finish
-    while (state->running_jobs_count > 0) {
+    while (state->jobs_count > 0) {
       int status;
       const pid_t pid = waitpid(-1, &status, 0);
 
@@ -505,7 +371,16 @@ static void cleanup_all(runtime_state_t *state, command_t *commands,
         break;
       }
 
-      remove_running_job(state, pid);
+      // remove from running jobs by finding and shifting
+      for (int i = 0; i < state->jobs_count; i++) {
+        if (state->jobs[i].pid == pid) {
+          for (int j = i; j < state->jobs_count - 1; j++) {
+            state->jobs[j] = state->jobs[j + 1];
+          }
+          state->jobs_count--;
+          break;
+        }
+      }
     }
   }
 
@@ -519,12 +394,10 @@ static void cleanup_all(runtime_state_t *state, command_t *commands,
   }
 
   // free running jobs tracking
-  if (state) {
-    free(state->running_jobs);
-
-    state->running_jobs = NULL;
-    state->running_jobs_count = 0;
-    state->running_jobs_capacity = 0;
+  if (state && state->jobs) {
+    free(state->jobs);
+    state->jobs = NULL;
+    state->jobs_count = 0;
   }
 }
 
@@ -550,9 +423,8 @@ int main(const int argc, const char *argv[]) {
   command_t *commands = NULL;
   int num_commands = 0;
   runtime_state_t state = {
-      .running_jobs = NULL,
-      .running_jobs_count = 0,
-      .running_jobs_capacity = 0,
+      .jobs = NULL,
+      .jobs_count = 0,
       .interrupted = 0,
   };
 
@@ -570,9 +442,17 @@ int main(const int argc, const char *argv[]) {
   // add flags
   const cli_flag_state_t *help_flag =
       cli_app_add_flag(app, &CLI_HELP_FLAG_META);
-  const cli_flag_state_t *jobs_flag = cli_app_add_flag(app, &JOBS_FLAG_META);
+  cli_app_add_flag(
+      app, &(cli_flag_meta_t){
+               .short_name = "j",
+               .long_name = "jobs",
+               .description =
+                   "Limit number of parallel jobs (has no effect, kept for "
+                   "backward compatibility)",
+               .type = FLAG_TYPE_STRING,
+           });
 
-  if (!help_flag || !jobs_flag) {
+  if (!help_flag) {
     fputs(ERR_ALLOCATION_FAILED, stderr);
 
     goto cleanup;
@@ -612,17 +492,6 @@ int main(const int argc, const char *argv[]) {
     exit_code = EXIT_SUCCESS_CODE;
 
     goto cleanup;
-  }
-
-  // parse jobs limit if provided
-  int max_jobs = -1;
-  if (jobs_flag->value_source != FLAG_VALUE_SOURCE_NONE &&
-      jobs_flag->value_source != FLAG_VALUE_SOURCE_DEFAULT) {
-    if (!validate_and_convert_jobs(jobs_flag->value.string_value, &max_jobs)) {
-      fputs(ERR_INVALID_JOBS_VALUE, stderr);
-
-      goto cleanup;
-    }
   }
 
   // check if any commands provided
@@ -690,33 +559,35 @@ int main(const int argc, const char *argv[]) {
     goto cleanup;
   }
 
-  // execute commands with job limiting
-  int next_cmd = 0;
-  const int max_parallel = (max_jobs > 0) ? max_jobs : num_commands;
+  // allocate jobs array
+  state.jobs = calloc((size_t)num_commands, sizeof(job_t));
+  if (!state.jobs) {
+    fputs(ERR_ALLOCATION_FAILED, stderr);
 
-  // start initial batch of jobs
-  while (next_cmd < num_commands && state.running_jobs_count < max_parallel) {
-    const pid_t pid = execute_command(&commands[next_cmd]);
+    goto cleanup;
+  }
+
+  // start all commands
+  for (int i = 0; i < num_commands; i++) {
+    const pid_t pid = execute_command(&commands[i]);
     if (pid < 0) {
-      goto cleanup; // failed to start command
-    }
-
-    if (!add_running_job(&state, pid, pid, next_cmd)) {
-      safe_kill_group(pid, SIGTERM);
-
+      // failed to start command - kill all already started and exit
+      kill_all_jobs(&state);
       goto cleanup;
     }
 
-    next_cmd++;
+    state.jobs[state.jobs_count].pid = pid;
+    state.jobs[state.jobs_count].pgid = pid;
+    state.jobs_count++;
   }
 
-  // wait for jobs and start new ones as slots become available
+  // wait for all jobs to complete
   int first_error = 0;
-  while (state.running_jobs_count > 0) {
+  while (state.jobs_count > 0) {
     // check for interrupt signal
     if (state.interrupted && first_error == 0) {
       first_error = EXIT_FAILURE_CODE;
-      kill_all_jobs(&state, SIGTERM);
+      kill_all_jobs(&state);
     }
 
     int status;
@@ -724,8 +595,7 @@ int main(const int argc, const char *argv[]) {
 
     if (pid < 0) {
       if (errno == EINTR) {
-        continue; // interrupted by signal - continue loop to check
-                  // interrupted flag
+        continue; // interrupted by signal - continue loop to check flag
       }
 
       if (errno == ECHILD) {
@@ -741,49 +611,36 @@ int main(const int argc, const char *argv[]) {
       break;
     }
 
-    // remove from running jobs
-    if (!remove_running_job(&state, pid)) {
-      // unknown PID - not from our jobs, ignore and continue
+    // find and remove job from tracking
+    bool job_found = false;
+    for (int i = 0; i < state.jobs_count; i++) {
+      if (state.jobs[i].pid == pid) {
+        // shift remaining jobs
+        for (int j = i; j < state.jobs_count - 1; j++) {
+          state.jobs[j] = state.jobs[j + 1];
+        }
+        state.jobs_count--;
+        job_found = true;
+        break;
+      }
+    }
+
+    // ignore PIDs that are not from our jobs
+    if (!job_found) {
       continue;
     }
 
     // check exit status
-    bool job_failed = false;
     if (WIFEXITED(status)) {
       const int exit_status = WEXITSTATUS(status);
-      if (exit_status != 0) {
-        job_failed = true;
-
-        if (first_error == 0) {
-          first_error = exit_status;
-        }
+      if (exit_status != 0 && first_error == 0) {
+        first_error = exit_status;
+        kill_all_jobs(&state);
       }
     } else if (WIFSIGNALED(status)) {
-      job_failed = true;
-
       if (first_error == 0) {
         first_error = EXIT_FAILURE_CODE;
-      }
-    }
-
-    if (job_failed) {
-      // kill all running jobs and don't start new ones
-      kill_all_jobs(&state, SIGTERM);
-      next_cmd = num_commands; // prevent starting new jobs
-    } else {
-      // start next job if available and no errors yet
-      if (next_cmd < num_commands && first_error == 0 && !state.interrupted) {
-        const pid_t new_pid = execute_command(&commands[next_cmd]);
-        if (new_pid > 0) {
-          if (!add_running_job(&state, new_pid, new_pid, next_cmd)) {
-            // failed to track job - kill it and stop
-            safe_kill_group(new_pid, SIGTERM);
-            first_error = EXIT_FAILURE_CODE;
-            kill_all_jobs(&state, SIGTERM);
-          } else {
-            next_cmd++;
-          }
-        }
+        kill_all_jobs(&state);
       }
     }
   }

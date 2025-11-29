@@ -467,65 +467,6 @@ def get_test_cases() -> List[TestCase]:
             want_max_duration=0.8,
         ),
 
-        # Job limiting (-j flag)
-
-        TestCase(
-            name="Jobs: -j 1 serializes execution",
-            give_args=["-j", "1", "sleep 0.3", "sleep 0.3", "sleep 0.3"],
-            want_exit_code=0,
-            want_min_duration=0.9,  # 3 * 0.3 = 0.9s
-        ),
-
-        TestCase(
-            name="Jobs: -j 2 limits to 2 parallel",
-            give_args=["-j", "2", "sleep 0.4", "sleep 0.4", "sleep 0.4"],
-            want_exit_code=0,
-            want_min_duration=0.8,  # 0.4 + 0.4 = 0.8s (first two parallel, then third)
-            want_max_duration=1.2,
-        ),
-
-        TestCase(
-            name="Jobs: --jobs flag works",
-            give_args=["--jobs", "1", "sleep 0.2", "sleep 0.2"],
-            want_exit_code=0,
-            want_min_duration=0.4,  # 2 * 0.2 = 0.4s
-        ),
-
-        TestCase(
-            name="Jobs: -j 10 with 3 commands (all parallel)",
-            give_args=["-j", "10", "sleep 0.3", "sleep 0.3", "sleep 0.3"],
-            want_exit_code=0,
-            want_max_duration=0.8,  # Should be ~0.3s
-        ),
-
-        TestCase(
-            name="Jobs: Invalid -j value (zero)",
-            give_args=["-j", "0", "true"],
-            want_exit_code=1,
-            want_stderr_contains="must be a positive integer",
-        ),
-
-        TestCase(
-            name="Jobs: Invalid -j value (negative)",
-            give_args=["-j", "-5", "true"],
-            want_exit_code=1,
-            want_stderr_contains="must be a positive integer",
-        ),
-
-        TestCase(
-            name="Jobs: Invalid -j value (non-numeric)",
-            give_args=["-j", "abc", "true"],
-            want_exit_code=1,
-            want_stderr_contains="must be a positive integer",
-        ),
-
-        TestCase(
-            name="Jobs: Missing -j argument",
-            give_args=["-j"],
-            want_exit_code=1,
-            want_stderr_contains="missing value for flag -j",
-        ),
-
         # Error propagation
 
         TestCase(
@@ -769,13 +710,6 @@ def get_test_cases() -> List[TestCase]:
             name="Realistic: One healthcheck fails",
             give_args=["true", "false", "true"],
             want_exit_code=1,
-        ),
-
-        TestCase(
-            name="Realistic: Parallel with -j limit",
-            give_args=["-j", "2", "sleep 0.1", "sleep 0.1", "sleep 0.1", "sleep 0.1"],
-            want_exit_code=0,
-            want_min_duration=0.2,  # At least 2 batches
         ),
     ]
 

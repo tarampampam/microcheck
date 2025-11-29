@@ -9,7 +9,8 @@ C_WARNING_FLAGS  = -Wall -Wextra -Werror -Wpedantic -Wformat=2 -Wformat-security
 	-Wstack-protector -Wstrict-overflow=3 -Wwrite-strings -Wconversion -Wshadow
 C_STRIP_FLAGS    = -s -fno-asynchronous-unwind-tables -fno-ident -Wl,--build-id=none -Wl,--hash-style=gnu
 C_LDFLAGS        = -static -Wl,--gc-sections -Wl,--as-needed -Wl,-O1 -Wl,--strip-all
-CFLAGS           = $(C_SIZE_FLAGS) $(C_SECURITY_FLAGS) $(C_WARNING_FLAGS) $(C_STRIP_FLAGS) $(C_LDFLAGS)
+CFLAGS           =$(C_SIZE_FLAGS) $(C_SECURITY_FLAGS) $(C_WARNING_FLAGS) $(C_STRIP_FLAGS) $(C_LDFLAGS)
+CFLAGS          += -std=c99 -D_POSIX_C_SOURCE=200809L
 STRIP_FLAGS      = -s -R .comment -R .gnu.version -R .note -R .note.ABI-tag -R .note.gnu.build-id -R .gnu.hash \
 	-R .eh_frame -R .eh_frame_hdr
 
