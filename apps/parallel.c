@@ -12,6 +12,7 @@
 // similar functions to keep result binary small
 
 #include "../lib/cli/cli.h"
+#include "../lib/command/command.h"
 #include "version.h"
 #include <errno.h>
 #include <signal.h>
