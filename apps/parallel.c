@@ -35,7 +35,7 @@
 /* Error messages */
 #define ERR_FAILED_TO_SETUP_SIG_HANDLER "Error: failed to setup signal handler"
 #define ERR_ALLOCATION_FAILED "Error: memory allocation failed\n"
-#define ERR_UNKNOWN_PARSING_ERROR "unknown parsing flags error\n"
+#define ERR_UNKNOWN_PARSING_ERROR "unknown parsing flags error"
 #define ERR_NO_COMMANDS_SPECIFIED "Error: no commands specified\n"
 #define ERR_TOO_MANY_COMMANDS "Error: too many commands\n"
 #define ERR_NO_VALID_COMMANDS "Error: no valid commands specified\n"
@@ -484,12 +484,13 @@ int main(const int argc, const char *argv[]) {
 
   // show help if requested and exit
   if (help_flag->value.bool_value) {
-    const char *help_text = cli_app_help(app);
+    char *help_text = cli_app_help(app);
     if (!help_text) {
       goto cleanup;
     }
 
     fputs(help_text, stderr);
+    free(help_text);
     exit_code = EXIT_SUCCESS_CODE;
 
     goto cleanup;

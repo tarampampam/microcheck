@@ -8,10 +8,10 @@
  * Predefined help flag metadata.
  */
 const cli_flag_meta_t CLI_HELP_FLAG_META = {
-  .short_name = "h",
-  .long_name = "help",
-  .description = "Show this help message",
-  .type = FLAG_TYPE_BOOL,
+    .short_name = "h",
+    .long_name = "help",
+    .description = "Show this help message",
+    .type = FLAG_TYPE_BOOL,
 };
 
 /**

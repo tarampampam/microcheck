@@ -134,8 +134,8 @@ static bool validate_no_crlf(const char *value) {
     return false;
   }
 
-  for (size_t i = 0; value[i] != '\0'; i++) {
-    if (value[i] == '\r' || value[i] == '\n') {
+  for (const char *p = value; *p != '\0'; p++) {
+    if (*p == '\r' || *p == '\n') {
       return false;
     }
   }
