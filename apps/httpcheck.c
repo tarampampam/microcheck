@@ -13,8 +13,10 @@
 #include "../lib/cli/cli.h"
 #include "../lib/http/http.h"
 #include "version.h"
+#include <arpa/inet.h>
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -46,28 +48,14 @@
 #define EXIT_SUCCESS_CODE 0
 #define EXIT_FAILURE_CODE 1
 
-/**
- * Request result types - used to distinguish connection errors from HTTP
- * errors.
- */
-typedef enum {
-  REQUEST_SUCCESS = 0,    // 2xx status code received
-  REQUEST_HTTP_ERROR = 1, // Valid HTTP response but non-2xx status (4xx, 5xx)
-  REQUEST_CONNECTION_ERROR = 2 // Connection/TLS error, no valid HTTP response
-} request_result_t;
-
-/* Buffer sizes - chosen to handle typical HTTP responses without excessive
- * memory */
-#define BUFFER_SIZE 4096
-#define MAX_HOSTNAME_LEN 256
-#define MAX_PATH_LEN 1024
+#define BUFFER_SIZE 4096 // TODO: remove
 #define MAX_HEADER_LEN 512
 
 /* HTTP status code ranges */
 #define HTTP_STATUS_SUCCESS_MIN 200
 #define HTTP_STATUS_SUCCESS_MAX 299
-#define HTTP_STATUS_MIN 100
-#define HTTP_STATUS_MAX 999
+#define HTTP_STATUS_MIN 100 // TODO: remove
+#define HTTP_STATUS_MAX 999 // TODO: remove
 
 /* Timeout limits (1 second to 1 hour) */
 #define MIN_TIMEOUT 1
@@ -78,11 +66,8 @@ typedef enum {
 #define MAX_PORT 65535
 
 /* HTTP protocol constants */
-#define HTTP_SCHEME "http://"
-#define HTTP_SCHEME_LEN 7
-#define HTTP_DEFAULT_PORT 80
-#define HTTP_VERSION "HTTP/1.1"
-#define HTTP_MIN_STATUS_LINE_LEN 12 /* "HTTP/1.x XXX" */
+#define HTTP_DEFAULT_PORT 80                             // TODO: remove
+#define HTTP_MIN_STATUS_LINE_LEN 12 /* "HTTP/1.x XXX" */ // TODO: remove
 
 #ifdef WITH_TLS
 /* HTTPS protocol constants */
@@ -125,23 +110,28 @@ typedef enum {
 #define ERR_INVALID_BASIC_AUTH                                                 \
   "Error: basic auth must be in format 'username:password'\n"
 #define ERR_EMPTY_HOST "Error: host cannot be empty\n"
-#define ERR_METHOD_CRLF "Error: method contains invalid characters (CR/LF)\n"
 #define ERR_URL_CONTAINS_CRLF "Error: URL contains invalid characters (CR/LF)\n"
 #define ERR_URL_EMPTY_HOSTNAME "Error: URL hostname cannot be empty\n"
-#define ERR_URL_INVALID_CHARS_AFTER_PORT "Error: invalid characters after port in URL\n"
+#define ERR_URL_INVALID_CHARS_AFTER_PORT                                       \
+  "Error: invalid characters after port in URL\n"
 #define ERR_URL_INVALID_PORT "Error: invalid port in URL\n"
 #define ERR_URL_PARSING_FAILED "Error: invalid URL format\n"
+#define ERR_HTTPS_NOT_SUPPORTED                                                \
+  "Error: HTTPS not supported in this build, use httpscheck binary instead\n"
+#define ERR_SOCKET_ERROR "Error: socket error\n"
+#define ERR_DOMAIN_RESOLVING_ERROR "Error: failed to resolve domain name\n"
+#define ERR_BAD_REQUEST_ERROR "Error: failed to build HTTP request\n"
+#define ERR_BAD_RESPONSE_ERROR "Error: invalid HTTP response from server\n"
+#define ERR_UNKNOWN_ERROR "Error: unknown error occurred\n"
 
 /* Global flag for signal handling - volatile ensures visibility across signal
  * handler */
 static volatile sig_atomic_t interrupted = 0;
 
-#ifndef EXAMPLES_SCHEME
 #ifdef WITH_TLS
-#define EXAMPLES_SCHEME HTTPS_SCHEME
+#define EXAMPLES_SCHEME "https://"
 #else
-#define EXAMPLES_SCHEME HTTP_SCHEME
-#endif
+#define EXAMPLES_SCHEME "http://"
 #endif
 
 static const cli_app_meta_t APP_META = {
@@ -166,9 +156,9 @@ static const cli_app_meta_t APP_META = {
     .examples =
         "  # Basic healthcheck\n"
 #ifdef WITH_TLS
-        "  " APP_NAME " " HTTPS_SCHEME "127.0.0.1\n"
+        "  " APP_NAME " https://127.0.0.1\n"
 #endif
-        "  " APP_NAME " " HTTP_SCHEME "127.0.0.1\n"
+        "  " APP_NAME " http://127.0.0.1\n"
 #ifdef WITH_TLS
         "\n"
         "  # Protocol auto-detection (tries HTTPS first, falls back to HTTP)\n"
@@ -202,7 +192,7 @@ static const cli_app_meta_t APP_META = {
         "  # Multiple custom headers with timeout\n"
         "  " APP_NAME " -" FLAG_TIMEOUT_SHORT " 10 -" FLAG_HEADER_SHORT
         " \"Accept: application/json\" -" FLAG_HEADER_SHORT
-        " \"X-Request-ID: 123\" " EXAMPLES_SCHEME "api.example.com"};
+        " \"X-Request-ID: 123\" " EXAMPLES_SCHEME "api.example.com\n"};
 
 static const cli_flag_meta_t METHOD_FLAG_META = {
     .short_name = FLAG_METHOD_SHORT,
@@ -331,74 +321,6 @@ static bool setup_signal_handlers(void) {
 }
 
 /**
- * Validate string for CRLF injection attempts.
- * Returns false if string contains CR or LF characters.
- */
-static bool validate_no_crlf(const char *str) {
-  if (!str) {
-    return false;
-  }
-
-  for (const char *p = str; *p != '\0'; p++) {
-    if (*p == '\r' || *p == '\n') {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-/**
- * Validate string for CRLF injection attempts with explicit length.
- * Returns false if string contains CR or LF characters within the specified
- * length.
- */
-static bool validate_no_crlf_len(const char *str, size_t len) {
-  if (str == NULL) {
-    return false;
-  }
-
-  for (size_t i = 0; i < len; i++) {
-    if (str[i] == '\r' || str[i] == '\n') {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-/**
- * Validate custom HTTP header format.
- * Headers must be in format "Name: Value" with no leading/trailing whitespace
- * in name.
- */
-static bool validate_header(const char *header) {
-  if (header == NULL || *header == '\0') {
-    return false;
-  }
-
-  // find colon separator
-  const char *colon = strchr(header, ':');
-  if (colon == NULL || colon == header) {
-    return false;
-  }
-
-  // check for whitespace in header name (before colon)
-  for (const char *p = header; p < colon; p++) {
-    if (isspace((unsigned char)*p)) {
-      return false;
-    }
-  }
-
-  // Check for CRLF injection attempts in entire header
-  if (!validate_no_crlf(header)) {
-    return false;
-  }
-
-  return true;
-}
-
-/**
  * Set socket timeout for both send and receive operations.
  * Prevents indefinite blocking on network operations.
  */
@@ -433,6 +355,23 @@ static inline bool is_success_status(const long status) {
 static inline bool is_valid_status(const long status) {
   return status >= HTTP_STATUS_MIN && status <= HTTP_STATUS_MAX;
 }
+
+/**
+ * Request result types - used to distinguish connection errors from HTTP
+ * errors.
+ */
+typedef enum {
+  REQUEST_SUCCESS,          // 2xx status code received
+  REQUEST_ALLOCATION_ERROR, // memory allocation error
+  REQUEST_SOCKET_ERROR,
+  REQUEST_DOMAIN_RESOLVING_ERROR,
+  REQUEST_BAD_REQUEST_ERROR,
+  REQUEST_BAD_RESPONSE_ERROR,
+  REQUEST_INTERRUPTED_ERROR,
+  REQUEST_HTTP_ERROR,       // TODO: delete
+  REQUEST_CONNECTION_ERROR, // TODO: delete
+  REQUEST_UNKNOWN_ERROR,
+} request_result_t;
 
 #ifdef WITH_TLS
 /**
@@ -731,240 +670,224 @@ cleanup:
 #endif
 
 /**
- * Perform HTTP request and validate response status code.
- * Returns REQUEST_SUCCESS for 2xx responses, REQUEST_HTTP_ERROR for non-2xx
- * responses, and REQUEST_CONNECTION_ERROR for connection errors.
+ * Resolve hostname to IPv4 address.
+ * Returns true on success, false on failure.
  */
-static request_result_t http_request(const char *host, int port,
-                                     const char *path, const char *method,
-                                     const char *user_agent, int timeout,
-                                     char **headers, size_t header_count,
-                                     const char *basic_auth) {
-  int sockfd = -1;
-  request_result_t result = REQUEST_CONNECTION_ERROR;
-
-  // create TCP socket
-  sockfd = socket(AF_INET, SOCK_STREAM, 0);
-  if (sockfd < 0) {
-    fputs("Error: failed to create socket: ", stderr);
-    fputs(strerror(errno), stderr);
-    fputc('\n', stderr);
-
-    return REQUEST_CONNECTION_ERROR;
+static bool resolve_host(const char *host, struct in_addr *addr) {
+  // check for interruption before starting
+  if (interrupted) {
+    return false;
   }
 
-  // configure socket timeouts to prevent hanging
-  if (!set_socket_timeout(sockfd, timeout)) {
-    fputs("Error: failed to set socket timeout: ", stderr);
-    fputs(strerror(errno), stderr);
-    fputc('\n', stderr);
-
-    goto cleanup;
+  // try to parse as IPv4 address first
+  if (inet_pton(AF_INET, host, addr) == 1) {
+    return true;
   }
 
-  // resolve hostname using getaddrinfo (thread-safe and works better with
-  // static linking)
+  // resolve as hostname using getaddrinfo (thread-safe and modern)
   struct addrinfo hints;
   struct addrinfo *result_addr = NULL;
 
   memset(&hints, 0, sizeof(hints));
-
   hints.ai_family = AF_INET;       // IPv4
   hints.ai_socktype = SOCK_STREAM; // TCP
 
-  char port_str[16];
+  const int addr_info = getaddrinfo(host, NULL, &hints, &result_addr);
 
-  snprintf(port_str, sizeof(port_str), "%d", port);
+  // check for interruption after potentially blocking call
+  if (interrupted) {
+    if (result_addr != NULL) {
+      freeaddrinfo(result_addr);
+    }
 
-  int gai_result = getaddrinfo(host, port_str, &hints, &result_addr);
-
-  if (gai_result != 0) {
-    fputs("Error: failed to resolve host '", stderr);
-    fputs(host, stderr);
-    fputs("': ", stderr);
-    fputs(gai_strerror(gai_result), stderr);
-    fputc('\n', stderr);
-
-    goto cleanup;
+    return false;
   }
 
-  if (result_addr == NULL) {
-    fputs("Error: no address found for host '", stderr);
-    fputs(host, stderr);
-    fputs("'\n", stderr);
-
-    goto cleanup;
+  if (addr_info != 0) {
+    return false;
   }
 
-  // prepare server address structure from getaddrinfo result
-  struct sockaddr_in serv_addr;
-  memset(&serv_addr, 0, sizeof(serv_addr));
-
-  // Validate address family and size before copying
+  // extract IPv4 address from result
+  // Validate address family before casting
   if (result_addr->ai_family != AF_INET) {
-    fputs("Error: unexpected address family (expected AF_INET)\n", stderr);
     freeaddrinfo(result_addr);
-    goto cleanup;
-  }
 
-  if (result_addr->ai_addrlen != sizeof(struct sockaddr_in)) {
-    fputs("Error: address size mismatch\n", stderr);
-    freeaddrinfo(result_addr);
-    goto cleanup;
+    return false;
   }
 
   if (result_addr->ai_addr == NULL) {
-    fputs("Error: address structure is NULL\n", stderr);
     freeaddrinfo(result_addr);
-    goto cleanup;
-  }
-  memcpy(&serv_addr, result_addr->ai_addr, result_addr->ai_addrlen);
 
-  // free getaddrinfo result
+    return false;
+  }
+
+  const struct sockaddr_in *ipv4 = (struct sockaddr_in *)result_addr->ai_addr;
+  memcpy(addr, &ipv4->sin_addr, sizeof(*addr));
+
   freeaddrinfo(result_addr);
 
-  result_addr = NULL;
+  return true;
+}
+
+/**
+ * Perform HTTP request and validate response status code.
+ * Returns REQUEST_SUCCESS for 2xx responses, REQUEST_HTTP_ERROR for non-2xx
+ * responses, and REQUEST_CONNECTION_ERROR for connection errors.
+ */
+static request_result_t http_request(const char *method,
+                                     const http_url_parsed_t *url,
+                                     const http_headers_t *headers,
+                                     const int timeout) {
+  char *host = malloc(url->host_len + 1); // +1 for null terminator
+  if (!host) {
+    return REQUEST_ALLOCATION_ERROR;
+  }
+
+  request_result_t result = REQUEST_UNKNOWN_ERROR;
+
+  memcpy(host, url->host, url->host_len);
+  host[url->host_len] = '\0';
+
+  // create TCP socket
+  const int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+  if (sockfd < 0) {
+    result = REQUEST_SOCKET_ERROR;
+
+    goto cleanup;
+  }
+
+  // configure socket timeouts to prevent hanging
+  if (!set_socket_timeout(sockfd, timeout)) {
+    result = REQUEST_SOCKET_ERROR;
+
+    goto cleanup;
+  }
+
+  // resolve the host IP address
+  struct in_addr addr;
+  if (!resolve_host(host, &addr)) {
+    result = REQUEST_DOMAIN_RESOLVING_ERROR;
+
+    goto cleanup;
+  }
+
+  // prepare address
+  struct sockaddr_in server_addr;
+  memset(&server_addr, 0, sizeof(server_addr));
+
+  server_addr.sin_family = AF_INET;
+  server_addr.sin_port = htons((uint16_t)url->port);
+  server_addr.sin_addr = addr;
+
+  // check for interruption before connection attempt
+  if (interrupted) {
+    result = REQUEST_INTERRUPTED_ERROR;
+
+    goto cleanup;
+  }
+
+
+
+  printf("\n\n==================================\n");
+
+  char ip_str[INET_ADDRSTRLEN];
+  inet_ntop(AF_INET, &addr, ip_str, INET_ADDRSTRLEN);
+  printf("Resolved IP: %s, Port: %u\n", ip_str, url->port);
+
+  printf("\n==================================\n\n");
+
+  int flags = fcntl(sockfd, F_GETFL, 0);
+  fcntl(sockfd, F_SETFL, flags & ~O_NONBLOCK);
 
   // establish connection
-  if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-    if (errno == EINTR) {
-      fputs(ERR_INTERRUPTED, stderr);
-    } else {
-      fputs("Error: failed to connect to ", stderr);
-      fputs(host, stderr);
-      fputc(':', stderr);
-      fprintf(stderr, "%d", port);
-      fputs(": ", stderr);
-      fputs(strerror(errno), stderr);
-      fputc('\n', stderr);
-    }
+  if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) <
+      0) {
+    printf("\n\n==================================\n");
+    fprintf(stderr, "Connect failed: %s (errno: %d)\n", strerror(errno), errno);
+    printf("\n==================================\n\n");
+
+    result = REQUEST_SOCKET_ERROR;
 
     goto cleanup;
   }
 
   // check for interruption after blocking operation
   if (interrupted) {
-    fputs(ERR_INTERRUPTED, stderr);
+    result = REQUEST_INTERRUPTED_ERROR;
 
     goto cleanup;
   }
 
-  // build HTTP request - using HTTP/1.1 with Connection: close for simplicity
-  char request[BUFFER_SIZE];
-  int req_len = build_http_request(request, sizeof(request), method, path, host,
-                                   port, HTTP_DEFAULT_PORT, user_agent,
-                                   basic_auth, headers, header_count);
+  // build HTTP request payload
+  http_request_build_result_t request =
+      http_build_request(method, url, headers);
+  if (request.code != HTTP_REQUEST_BUILD_OK) {
+    result = REQUEST_BAD_REQUEST_ERROR;
 
-  if (req_len < 0) {
     goto cleanup;
   }
 
   // send HTTP request
-  ssize_t sent = send(sockfd, request, (size_t)req_len, 0);
+  const ssize_t sent = send(sockfd, request.buffer, request.length, 0);
   if (sent < 0) {
-    if (errno == EINTR) {
-      fputs(ERR_INTERRUPTED, stderr);
-    } else {
-      fputs("Error: failed to send request: ", stderr);
-      fputs(strerror(errno), stderr);
-      fputc('\n', stderr);
-    }
+    http_free_build_request_result(&request);
+    result = REQUEST_SOCKET_ERROR;
 
     goto cleanup;
   }
 
-  if (sent != req_len) {
-    fputs("Error: incomplete request sent (", stderr);
-    fprintf(stderr, "%zd of %d bytes)\n", sent, req_len);
+  // ensure all data was sent
+  if (sent != (ssize_t)request.length) {
+    result = REQUEST_SOCKET_ERROR;
+    http_free_build_request_result(&request);
 
     goto cleanup;
   }
+
+  http_free_build_request_result(&request);
 
   // check for interruption after blocking operation
   if (interrupted) {
-    fputs(ERR_INTERRUPTED, stderr);
+    result = REQUEST_INTERRUPTED_ERROR;
 
     goto cleanup;
   }
 
-  // receive HTTP response - only need status line, not full body
-  char response[BUFFER_SIZE];
-  ssize_t received = recv(sockfd, response, sizeof(response) - 1, 0);
-  if (received < 0) {
-    if (errno == EINTR) {
-      fputs(ERR_INTERRUPTED, stderr);
-    } else {
-      fputs("Error: failed to receive response: ", stderr);
-      fputs(strerror(errno), stderr);
-      fputc('\n', stderr);
+  char resp_buf[32]; // 32 bytes is enough for status line
+  const ssize_t resp_buf_read = recv(sockfd, resp_buf, sizeof(resp_buf), 0);
+
+  { // the rest of the response is not needed, so drain the data
+    shutdown(sockfd, SHUT_WR); // signal we're done
+
+    // drain any remaining data
+    char trash[1024];
+    while (recv(sockfd, trash, sizeof(trash), 0) > 0) {
+      // do nothing
     }
+  }
+
+  // ensure we've got enough at least the status line
+  if (resp_buf_read < 12) { // 12 = "HTTP/1.x XXX"
+    result = REQUEST_BAD_RESPONSE_ERROR;
 
     goto cleanup;
   }
 
-  if (received == 0) {
-    fputs("Error: connection closed by server\n", stderr);
+  // parse status code
+  const int status_code = http_get_response_status_code(resp_buf);
+  if (status_code < 0) {
+    result = REQUEST_BAD_RESPONSE_ERROR;
 
     goto cleanup;
   }
 
-  response[received] = '\0';
-
-  // validate minimum response length for "HTTP/1.x XXX"
-  if (received < HTTP_MIN_STATUS_LINE_LEN) {
-    fputs("Error: response too short\n", stderr);
-
-    goto cleanup;
+  if (is_success_status(status_code)) {
+    result = REQUEST_SUCCESS;
   }
-
-  // validate HTTP response format
-  if (strncmp(response, "HTTP/1.", 7) != 0) {
-    fputs("Error: invalid HTTP response (expected HTTP/1.x)\n", stderr);
-
-    goto cleanup;
-  }
-
-  // locate status code in response
-  char *status_start = strchr(response, ' ');
-  if (status_start == NULL) {
-    fputs("Error: malformed HTTP response (no status code)\n", stderr);
-
-    goto cleanup;
-  }
-  status_start++; // skip space
-
-  // parse status code with strict validation
-  char *endptr;
-  errno = 0;
-  long status = strtol(status_start, &endptr, 10);
-
-  if (errno != 0 || endptr == status_start) {
-    fputs("Error: invalid HTTP status code\n", stderr);
-
-    goto cleanup;
-  }
-
-  // validate status code range
-  if (!is_valid_status(status)) {
-    fputs("Error: HTTP status code out of range: ", stderr);
-    fprintf(stderr, "%ld\n", status);
-    result = REQUEST_CONNECTION_ERROR; // Invalid response format
-    goto cleanup;
-  }
-
-  // check if status is in success range (2xx)
-  if (!is_success_status(status)) {
-    fputs("Error: HTTP status ", stderr);
-    fprintf(stderr, "%ld", status);
-    fputs(" (expected 2xx)\n", stderr);
-    result = REQUEST_HTTP_ERROR; // Valid HTTP response but non-2xx
-    goto cleanup;
-  }
-
-  // success - received 2xx status
-  result = REQUEST_SUCCESS;
 
 cleanup:
+  free(host);
+
   // always close socket to prevent fd leaks
   if (sockfd >= 0) {
     close(sockfd);
@@ -981,19 +904,34 @@ static bool parse_port(const char *str, int *port) {
     return false;
   }
 
-  char *endptr;
-  errno = 0;
-  long value = strtol(str, &endptr, 10);
+  // manual parsing for decimal digits only
+  int value = 0;
+  const char *p = str;
 
-  if (errno != 0 || *endptr != '\0' || endptr == str) {
+  // parse digits and accumulate value
+  while (*p >= '0' && *p <= '9') {
+    // check for overflow before multiplying
+    if (value > (MAX_PORT / 10)) {
+      return false;
+    }
+
+    value = value * 10 + (*p - '0');
+
+    p++;
+  }
+
+  // ensure we consumed the entire string and parsed at least one digit
+  if (*p != '\0' || p == str) {
     return false;
   }
 
-  if (value < MIN_PORT || value > MAX_PORT) {
+  // validate port range
+  if (value < MIN_PORT) {
     return false;
   }
 
-  *port = (int)value;
+  *port = value;
+
   return true;
 }
 
@@ -1013,7 +951,7 @@ static int parse_timeout(const char *str) {
       return -1;
     }
 
-    int digit = *p - '0';
+    const int digit = *p - '0';
 
     // проверка переполнения перед умножением
     if (result > (MAX_TIMEOUT - digit) / 10) {
@@ -1068,7 +1006,7 @@ int main(const int argc, const char *argv[]) {
   // initialize variables that need to be cleaned up on exit
   cli_app_state_t *app = NULL;
   cli_args_parsing_result_t *parsing_result = NULL;
-  http_headers_t *headers = NULL;
+  http_headers_t *headers = http_new_headers();
 
   // create CLI app instance
   app = new_cli_app(&APP_META);
@@ -1218,8 +1156,47 @@ int main(const int argc, const char *argv[]) {
     goto cleanup;
   }
 
+  // validate basic auth format and append header if provided
+  if (basic_auth_flag->value.string_value) {
+    if (strchr(basic_auth_flag->value.string_value, ':') == NULL) {
+      fputs(ERR_INVALID_BASIC_AUTH, stderr);
+
+      goto cleanup;
+    }
+
+    http_header_t *header =
+        http_new_basic_auth_header(basic_auth_flag->value.string_value);
+    if (!header) {
+      fputs(ERR_ALLOCATION_FAILED, stderr);
+
+      goto cleanup;
+    }
+
+    if (!http_headers_add_header(headers, header)) {
+      fputs(ERR_ALLOCATION_FAILED, stderr);
+
+      goto cleanup;
+    }
+  }
+
+  // validate user-agent and append header if provided
+  if (user_agent_flag->value.string_value) {
+    http_header_t *header =
+        http_new_user_agent_header(user_agent_flag->value.string_value);
+    if (!header) {
+      fputs(ERR_ALLOCATION_FAILED, stderr);
+
+      goto cleanup;
+    }
+
+    if (!http_headers_add_header(headers, header)) {
+      fputs(ERR_ALLOCATION_FAILED, stderr);
+
+      goto cleanup;
+    }
+  }
+
   // validate and construct custom headers
-  headers = http_new_headers();
   for (size_t i = 0; i < header_flag->value.strings_value.count; i++) {
     const char *header_str = header_flag->value.strings_value.list[i];
     const size_t header_len = strlen(header_str);
@@ -1243,25 +1220,23 @@ int main(const int argc, const char *argv[]) {
       goto cleanup;
     }
 
-    http_headers_add_header(headers, header);
-  }
-
-  // validate basic auth format
-  if (basic_auth_flag->value.string_value) {
-    if (strchr(basic_auth_flag->value.string_value, ':') == NULL) {
-      fputs(ERR_INVALID_BASIC_AUTH, stderr);
+    if (!http_headers_add_header(headers, header)) {
+      fputs(ERR_INVALID_HEADER_FORMAT, stderr);
 
       goto cleanup;
     }
   }
 
   // validate host override
+  const char *host_override = NULL;
   if (host_flag->value.string_value) {
     if (strlen(host_flag->value.string_value) == 0) {
       fputs(ERR_EMPTY_HOST, stderr);
 
       goto cleanup;
     }
+
+    host_override = host_flag->value.string_value;
   }
 
   // parse and validate port override
@@ -1282,9 +1257,9 @@ int main(const int argc, const char *argv[]) {
   }
 
   // parse URL into components
-  const http_url_parsing_result_t url = http_parse_url(url_str);
-  if (url.code != URL_PARSING_OK) {
-    switch (url.code) {
+  const http_url_parsing_result_t url_parsing_result = http_parse_url(url_str);
+  if (url_parsing_result.code != URL_PARSING_OK) {
+    switch (url_parsing_result.code) {
     case URL_PARSING_CONTAINS_CRLF:
       fputs(ERR_URL_CONTAINS_CRLF, stderr);
       break;
@@ -1305,43 +1280,31 @@ int main(const int argc, const char *argv[]) {
     goto cleanup;
   }
 
-  char host[MAX_HOSTNAME_LEN];
-  int port;
-  char path[MAX_PATH_LEN];
-  int protocol_mode = 0;
-  bool explicit_port_in_url = false;
-
-  if (!parse_url(url_str, host, sizeof(host), &port, path, sizeof(path),
-                 &protocol_mode, &explicit_port_in_url)) {
-    goto cleanup;
-  }
+  // craft final URL components with overrides applied
+  const http_url_parsed_t parsed_url = url_parsing_result.parsed;
+  const http_url_parsed_t url = {
+      .proto = parsed_url.proto,
+      .host = host_override
+                  ? host_override
+                  : parsed_url.host, // apply host override if provided
+      .host_len = host_override
+                      ? strlen(host_override)
+                      : parsed_url.host_len, // apply host override if provided
+      .port = port_override
+                  ? port_override
+                  : parsed_url.port, // apply port override if provided
+      .path = parsed_url.path,
+      .path_len = parsed_url.path_len,
+  };
 
 #ifndef WITH_TLS
-  // If TLS is requested but not supported, error out
-  if (protocol_mode != 0) {
-    fputs("Error: HTTPS not supported in this build\n", stderr);
-    fputs("Use the httpscheck binary for HTTPS support\n", stderr);
+  // if TLS is requested but not supported, error out
+  if (url.proto != PROTO_HTTP) {
+    fputs(ERR_HTTPS_NOT_SUPPORTED, stderr);
+
     goto cleanup;
   }
 #endif
-
-  // apply host override if provided
-  if (host_flag->value.string_value) {
-    size_t override_len = strlen(host_flag->value.string_value);
-    if (override_len >= sizeof(host)) {
-      fputs(ERR_HOST_OVERRIDE_TOO_LONG, stderr);
-
-      goto cleanup;
-    }
-
-    memcpy(host, host_flag->value.string_value, override_len);
-    host[override_len] = '\0';
-  }
-
-  // apply port override if provided
-  if (port_override != -1) {
-    port = port_override;
-  }
 
   // execute HTTP/HTTPS request and return result
   request_result_t result;
@@ -1389,12 +1352,36 @@ int main(const int argc, const char *argv[]) {
     }
   }
 #else
-  result = http_request(host, port, path, method_flag->value.string_value,
-                        user_agent_flag->value.string_value, timeout_sec,
-                        header_flag->value.strings_value.list,
-                        header_flag->value.strings_value.count,
-                        basic_auth_flag->value.string_value);
+  result =
+      http_request(method_flag->value.string_value, &url, headers, timeout_sec);
 #endif
+
+  switch (result) {
+  case REQUEST_SUCCESS:
+    // all good
+    break;
+  case REQUEST_ALLOCATION_ERROR:
+    fputs(ERR_ALLOCATION_FAILED, stderr);
+    break;
+  case REQUEST_SOCKET_ERROR:
+    fputs(ERR_SOCKET_ERROR, stderr);
+    break;
+  case REQUEST_DOMAIN_RESOLVING_ERROR:
+    fputs(ERR_DOMAIN_RESOLVING_ERROR, stderr);
+    break;
+  case REQUEST_BAD_REQUEST_ERROR:
+    fputs(ERR_BAD_REQUEST_ERROR, stderr);
+    break;
+  case REQUEST_BAD_RESPONSE_ERROR:
+    fputs(ERR_BAD_RESPONSE_ERROR, stderr);
+    break;
+  case REQUEST_INTERRUPTED_ERROR:
+    fputs(ERR_INTERRUPTED, stderr);
+    break;
+  default:
+    fputs(ERR_UNKNOWN_ERROR, stderr);
+    break;
+  }
 
   exit_code =
       (result == REQUEST_SUCCESS) ? EXIT_SUCCESS_CODE : EXIT_FAILURE_CODE;

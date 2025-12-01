@@ -115,6 +115,24 @@ typedef struct {
 http_header_t *http_new_header(const char *name, const char *value);
 
 /**
+ * Create a new HTTP Basic Authentication header from "username:password".
+ *
+ * Encodes the provided user:pass string into Base64 and constructs an
+ * "Authorization" header with the value "Basic <base64-encoded>".
+ *
+ * Returns NULL on allocation failure or if input is invalid.
+ */
+http_header_t *http_new_basic_auth_header(const char* user_pass);
+
+/**
+ * Create a new User-Agent HTTP header.
+ *
+ * Constructs a "User-Agent" header with the provided user agent string.
+ * Returns NULL on allocation failure or if input is invalid.
+ */
+http_header_t *http_new_user_agent_header(const char* user_agent);
+
+/**
  * Free HTTP header structure and its fields.
  */
 void http_free_header(http_header_t *);
@@ -162,6 +180,10 @@ http_headers_t *http_new_headers(void);
  *
  * Dynamically resizes the headers array to accommodate the new header.
  * Returns true on success, false on allocation failure.
+ *
+ * After adding, the headers collection takes ownership of the provided
+ * http_header_t pointer and will free it when the collection is freed
+ * (you shouldn't free it yourself).
  */
 bool http_headers_add_header(http_headers_t *, http_header_t *);
 
@@ -224,5 +246,14 @@ http_request_build_result_t http_build_request(const char *method,
  * the same result structure.
  */
 void http_free_build_request_result(http_request_build_result_t *);
+
+/**
+ * Extract HTTP response status code from raw response.
+ *
+ * Parses the status line of an HTTP response and extracts the numeric
+ * status code (e.g., 200, 404). Returns -1 if the response is invalid
+ * or the status code cannot be determined.
+ */
+int http_get_response_status_code(const char *resp);
 
 #endif // MICROCHECK_HTTP_H

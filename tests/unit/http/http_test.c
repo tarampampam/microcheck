@@ -4,34 +4,60 @@
 #include <stdlib.h>
 #include <string.h>
 
-static void assert_string_equal(const char *expected, const char *actual) {
-  if (expected == NULL && actual == NULL) {
-    return; // both NULL — consider equal
+static void assert_string_equal(const char *want, const char *got) {
+  if (got == NULL) {
+    fprintf(stderr,
+            "String mismatch:\n"
+            "  expected: \"%s\"\n"
+            "  actual:   (null)\n",
+            want);
+    assert(false);
   }
 
-  if (expected == NULL || actual == NULL) {
+  if (strcmp(want, got) != 0) {
     fprintf(stderr,
             "String mismatch:\n"
             "  expected: \"%s\"\n"
             "  actual:   \"%s\"\n",
-            expected ? expected : "(null)", actual ? actual : "(null)");
-    abort();
-  }
-
-  if (strcmp(expected, actual) != 0) {
-    fprintf(stderr,
-            "String mismatch:\n"
-            "  expected: \"%s\"\n"
-            "  actual:   \"%s\"\n",
-            expected, actual);
+            want, got);
 
     size_t i = 0;
-    while (expected[i] && actual[i] && expected[i] == actual[i]) {
+    while (want[i] && got[i] && want[i] == got[i]) {
       i++;
     }
 
     fprintf(stderr, "  first difference at index %zu\n", i);
-    abort();
+
+    assert(false);
+  }
+}
+
+static void assert_string_buffers_equal(const char *want, const size_t want_len,
+                                        const char *got, const size_t got_len) {
+  if (want_len != got_len) {
+    fprintf(stderr,
+            "Buffer length mismatch:\n"
+            "  expected length: %zu\n"
+            "  actual length:   %zu\n",
+            want_len, got_len);
+    assert(false);
+  }
+
+  if (memcmp(want, got, want_len) != 0) {
+    fprintf(stderr,
+            "Buffer content mismatch:\n"
+            "  expected: \"%.*s\"\n"
+            "  actual:   \"%.*s\"\n",
+            (int)want_len, want, (int)got_len, got);
+
+    size_t i = 0;
+    while (i < want_len && want[i] == got[i]) {
+      i++;
+    }
+
+    fprintf(stderr, "  first difference at index %zu\n", i);
+
+    assert(false);
   }
 }
 
@@ -622,56 +648,93 @@ static void test_http_headers(void) {
   { // adding headers
     http_headers_t *headers = http_new_headers();
     assert(headers != NULL);
-    // assert(headers->count == 0);
+    assert(headers->count == 0);
 
-    // http_header_t *header1 =
-    //     http_new_header("Content-Type", "application/json");
-    // assert(header1 != NULL);
-    // http_headers_add_header(headers, header1);
-    //
-    // http_header_t *header2 = http_new_header("X-Custom-Header", "CustomValue");
-    // http_headers_add_header(headers, header2);
+    http_header_t *header1 =
+        http_new_header("Content-Type", "application/json");
+    assert(header1 != NULL);
+    http_headers_add_header(headers, header1);
 
-    // assert(headers->count == 2);
-    // assert_string_equal("Content-Type", headers->headers[0]->name);
-    // assert_string_equal("application/json", headers->headers[0]->value);
-    // assert_string_equal("X-Custom-Header", headers->headers[1]->name);
-    // assert_string_equal("CustomValue", headers->headers[1]->value);
+    http_header_t *header2 = http_new_header("X-Custom-Header", "CustomValue");
+    http_headers_add_header(headers, header2);
 
-    // http_free_header(header2);
-    // http_free_header(header2); // no-op
-    //
-    // assert(headers->count == 2);
-    // assert(headers->headers != NULL);
-    // http_free_headers(headers);
-    // assert(headers->count == 0);
-    // assert(headers->headers == NULL);
-    //
-    // http_free_headers(headers); // no-op
-    // http_free_header(header1);  // no-op
-    // http_free_header(header1);  // no-op
+    assert(headers->count == 2);
+    assert_string_equal("Content-Type", headers->headers[0]->name);
+    assert_string_equal("application/json", headers->headers[0]->value);
+    assert_string_equal("X-Custom-Header", headers->headers[1]->name);
+    assert_string_equal("CustomValue", headers->headers[1]->value);
+
+    assert(headers->count == 2);
+    assert(headers->headers != NULL);
+    http_free_headers(headers);
   }
 
-  // { // same headers replacing
-  //   http_headers_t *headers = http_new_headers();
-  //   assert(headers != NULL);
-  //
-  //   http_header_t *header1 =
-  //       http_new_header("Content-Type", "application/json");
-  //   http_header_t *header2 =
-  //       http_new_header("Content-TYPE", "text/html"); // same name
-  //   http_header_t *header3 = http_new_header("X-Test", "Value");
-  //
-  //   http_headers_add_header(headers, header1);
-  //   http_headers_add_header(headers, header2); // should replace header1 value
-  //   http_headers_add_header(headers, header3);
-  //
-  //   assert(headers->count == 2);
-  //   assert_string_equal("text/html", headers->headers[0]->value);
-  //   assert_string_equal("Value", headers->headers[1]->value);
-  //
-  //   http_free_headers(headers);
-  // }
+  { // same headers replacing
+    http_headers_t *headers = http_new_headers();
+    assert(headers != NULL);
+
+    http_header_t *header1 =
+        http_new_header("Content-Type", "application/json");
+    http_header_t *header2 =
+        http_new_header("Content-Type", "text/html"); // same name
+    http_header_t *header3 = http_new_header("X-Test", "Value");
+    http_header_t *header4 = http_new_header(
+        "x-test", "AnotherValue"); // same name, but different case
+
+    http_headers_add_header(headers, header1);
+    http_headers_add_header(headers, header2); // should replace header1 value
+    http_headers_add_header(headers, header3);
+    http_headers_add_header(headers, header4);
+
+    assert(headers->count == 3);
+
+    assert_string_equal("Content-Type", headers->headers[0]->name);
+    assert_string_equal("text/html", headers->headers[0]->value);
+
+    assert_string_equal("X-Test", headers->headers[1]->name);
+    assert_string_equal("Value", headers->headers[1]->value);
+
+    assert_string_equal("x-test", headers->headers[2]->name);
+    assert_string_equal("AnotherValue", headers->headers[2]->value);
+
+    http_free_headers(headers);
+  }
+}
+
+static void test_http_new_basic_auth_header(void) {
+  http_header_t *header = http_new_basic_auth_header("admin:P@ssw0rd");
+  assert(header != NULL);
+
+  assert_string_equal("Authorization", header->name);
+  assert_string_equal("Basic YWRtaW46UEBzc3cwcmQ=", header->value);
+
+  http_free_header(header);
+
+  { // errors
+    // null input
+    assert(http_new_basic_auth_header(NULL) == NULL);
+
+    // empty input
+    assert(http_new_basic_auth_header("") == NULL);
+  }
+}
+
+static void test_http_new_user_agent_header(void) {
+  http_header_t *header = http_new_user_agent_header("Foo Bar/1.2.3");
+  assert(header != NULL);
+
+  assert_string_equal("User-Agent", header->name);
+  assert_string_equal("Foo Bar/1.2.3", header->value);
+
+  http_free_header(header);
+
+  { // errors
+    // null input
+    assert(http_new_user_agent_header(NULL) == NULL);
+
+    // empty input
+    assert(http_new_user_agent_header("") == NULL);
+  }
 }
 
 /**
@@ -708,7 +771,8 @@ static void test_http_build_request(void) {
                                    "Connection: close\r\n"
                                    "\r\n";
 
-    assert_string_equal(expected_request, result.buffer);
+    assert_string_buffers_equal(expected_request, strlen(expected_request),
+                                result.buffer, result.length);
 
     free(result.buffer);
   }
@@ -740,7 +804,8 @@ static void test_http_build_request(void) {
                                    "Connection: close\r\n"
                                    "\r\n";
 
-    assert_string_equal(expected_request, result.buffer);
+    assert_string_buffers_equal(expected_request, strlen(expected_request),
+                                result.buffer, result.length);
     http_free_build_request_result(&result);
   }
 
@@ -781,7 +846,8 @@ static void test_http_build_request(void) {
         "Connection: close\r\n"
         "\r\n";
 
-    assert_string_equal(expected_request, result.buffer);
+    assert_string_buffers_equal(expected_request, strlen(expected_request),
+                                result.buffer, result.length);
     http_free_build_request_result(&result);
   }
 
@@ -801,7 +867,8 @@ static void test_http_build_request(void) {
         "Connection: close\r\n"
         "\r\n";
 
-    assert_string_equal(expected_request, result.buffer);
+    assert_string_buffers_equal(expected_request, strlen(expected_request),
+                                result.buffer, result.length);
     http_free_build_request_result(&result);
   }
 
@@ -813,12 +880,12 @@ static void test_http_build_request(void) {
     assert(result.code == HTTP_REQUEST_BUILD_OK);
     assert(result.buffer != NULL);
     assert(result.length > 0);
-    const char *expected_request =
-        "GET / HTTP/1.1\r\n"
-        "Connection: close\r\n"
-        "\r\n";
+    const char *expected_request = "GET / HTTP/1.1\r\n"
+                                   "Connection: close\r\n"
+                                   "\r\n";
 
-    assert_string_equal(expected_request, result.buffer);
+    assert_string_buffers_equal(expected_request, strlen(expected_request),
+                                result.buffer, result.length);
     http_free_build_request_result(&result);
   }
 
@@ -830,13 +897,13 @@ static void test_http_build_request(void) {
     assert(result.code == HTTP_REQUEST_BUILD_OK);
     assert(result.buffer != NULL);
     assert(result.length > 0);
-    const char *expected_request =
-        "GET / HTTP/1.1\r\n"
-        "Host: test:8080\r\n"
-        "Connection: close\r\n"
-        "\r\n";
+    const char *expected_request = "GET / HTTP/1.1\r\n"
+                                   "Host: test:8080\r\n"
+                                   "Connection: close\r\n"
+                                   "\r\n";
 
-    assert_string_equal(expected_request, result.buffer);
+    assert_string_buffers_equal(expected_request, strlen(expected_request),
+                                result.buffer, result.length);
     http_free_build_request_result(&result);
   }
 
@@ -860,12 +927,76 @@ static void test_http_build_request(void) {
   }
 }
 
+static void test_http_get_response_status_code(void) {
+  assert(http_get_response_status_code("HTTP/1.1 200 OK") == 200);
+  assert(http_get_response_status_code("HTTP/1.0 404 Not Found") == 404);
+  assert(http_get_response_status_code("HTTP/1.1 500") == 500);
+
+  assert(http_get_response_status_code("\r\nHTTP/1.1 201 FOOBAR") == 201);
+  assert(http_get_response_status_code("HTTP/2 200 OK") == 200);
+  assert(http_get_response_status_code("HTTP/1.1 200  OK") == 200);
+  assert(http_get_response_status_code("HTTP/1.1 012 LeadingZero") == 12);
+  assert(http_get_response_status_code("HTTP/1.1 999 Something") == 999);
+  assert(http_get_response_status_code("HTTP/1.1 001") == 1);
+  assert(http_get_response_status_code("HTTP/1.1 000 Zero") == 0);
+
+  // without null-terminator in the middle of the string
+  assert(http_get_response_status_code(
+             "HTTP/1.1 302 Found\r\nLocation: /newpage\r\n") == 302);
+
+  // without text status string
+  assert(http_get_response_status_code(
+             "HTTP/1.1 302\r\nLocation: /newpage\r\n") == 302);
+
+  { // errors
+    // short code (2 digits) -> invalid
+    assert(http_get_response_status_code("HTTP/1.1 20 OK") == -1);
+
+    // non-digit in code -> invalid
+    assert(http_get_response_status_code("HTTP/1.1 2a0 OK") == -1);
+
+    // tab separator instead of space between version and code
+    assert(http_get_response_status_code("HTTP/1.1\t200 OK") == -1);
+
+    // four-digit code
+    assert(http_get_response_status_code("HTTP/1.1 1000 TooLong") == -1);
+
+    // invalid position of HTTP version
+    assert(http_get_response_status_code(" 200 HTTP/1.1 OK ") == -1);
+    assert(http_get_response_status_code(" 200 OK HTTP/1.1 ") == -1);
+
+    // missing space between version and code
+    assert(http_get_response_status_code("HTTP/1.1200 OK") == -1);
+
+    // missing code at all
+    assert(http_get_response_status_code("HTTP/1.1 ") == -1);
+    assert(http_get_response_status_code("HTTP/1.1") == -1);
+
+    // empty string
+    assert(http_get_response_status_code("") == -1);
+
+    // without HTTP version prefix
+    assert(http_get_response_status_code("200 OK") == -1);
+
+    // code ends with non-space character
+    assert(http_get_response_status_code("HTTP/1.1 200\r\n") == 200);
+    assert(http_get_response_status_code("HTTP/1.1 200\n") == 200);
+
+    // without leading zeros
+    assert(http_get_response_status_code("HTTP/1.1 1") == -1);
+    assert(http_get_response_status_code("HTTP/1.1 20") == -1);
+  }
+}
+
 int main() {
   test_http_base64_encode();
   test_http_parse_url();
   test_http_parse_header_string();
   test_http_headers();
+  test_http_new_basic_auth_header();
+  test_http_new_user_agent_header();
   test_http_build_request();
+  test_http_get_response_status_code();
 
   return 0;
 }

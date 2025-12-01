@@ -144,6 +144,61 @@ http_header_t *http_parse_header_string(const char *header_str) {
 }
 
 /**
+ * Create a new HTTP Basic Authentication header from "username:password".
+ */
+http_header_t *http_new_basic_auth_header(const char* user_pass) {
+  if (!user_pass || strlen(user_pass) == 0) {
+    return NULL;
+  }
+
+  char *encoded = http_base64_encode(user_pass);
+  if (!encoded) {
+    return NULL;
+  }
+
+  const char *prefix = "Basic ";
+  const size_t prefix_len = strlen(prefix);
+  const size_t encoded_len = strlen(encoded);
+
+  char *auth_value = malloc(prefix_len + encoded_len + 1);
+  if (!auth_value) {
+    free(encoded);
+
+    return NULL;
+  }
+
+  memcpy(auth_value, prefix, prefix_len);
+  memcpy(auth_value + prefix_len, encoded, encoded_len);
+  auth_value[prefix_len + encoded_len] = '\0';
+
+  free(encoded);
+
+  http_header_t *header = http_new_header("Authorization", auth_value);
+  free(auth_value);
+  if (!header) {
+    return NULL;
+  }
+
+  return header;
+}
+
+/**
+ * Create a new User-Agent HTTP header.
+ */
+http_header_t *http_new_user_agent_header(const char* user_agent) {
+  if (!user_agent || strlen(user_agent) == 0) {
+    return NULL;
+  }
+
+  http_header_t *header = http_new_header("User-Agent", user_agent);
+  if (!header) {
+    return NULL;
+  }
+
+  return header;
+}
+
+/**
  * Free HTTP header structure and its fields.
  */
 void http_free_header(http_header_t *header) {
@@ -179,9 +234,6 @@ http_headers_t *http_new_headers(void) {
 
 /**
  * Add an HTTP header to the headers' collection.
- *
- * Dynamically resizes the headers array to accommodate the new header.
- * Returns true on success, false on allocation failure.
  */
 bool http_headers_add_header(http_headers_t *headers, http_header_t *header) {
   if (!headers || !header) {

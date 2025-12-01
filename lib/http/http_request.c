@@ -151,6 +151,9 @@ static char *normalize_method(const char *method) {
   return result;
 }
 
+/**
+ * Free resources allocated by http_build_request().
+ */
 void http_free_build_request_result(http_request_build_result_t *result) {
   if (result) {
     free(result->buffer);

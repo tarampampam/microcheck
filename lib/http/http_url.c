@@ -13,18 +13,18 @@ static int parse_port(const char *str, const char **end_ptr) {
   const char *p = str;
   unsigned int value = 0;
 
-  // Must start with a digit
+  // must start with a digit
   if (*p < '0' || *p > '9') {
     *end_ptr = str;
 
     return -1;
   }
 
-  // Parse digits
+  // parse digits
   while (*p >= '0' && *p <= '9') {
     const unsigned int digit = (unsigned int)(*p - '0');
 
-    // Check for overflow before multiplication
+    // check for overflow before multiplication
     if (value > (65535U - digit) / 10U) {
       *end_ptr = p + 1;
 
@@ -37,7 +37,7 @@ static int parse_port(const char *str, const char **end_ptr) {
 
   *end_ptr = p;
 
-  // Check range
+  // check range
   if (value < 1U || value > 65535U) {
     return -1;
   }
