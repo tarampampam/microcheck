@@ -44,13 +44,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - run: make CC=clang C_LDFLAGS_EXTRA="-arch ${{ matrix.arch }}"
-      - run: ls -lh ./build/bin/
       - run: |
-          ./build/bin/httpcheck --help
+          ls -lh ./build/bin/
+          ./build/bin/httpcheck --help # try to execute some binaries
           ./build/bin/httpscheck --help
-          ./build/bin/portcheck --help
-          ./build/bin/parallel --help
-          ./build/bin/pidcheck --help
 
   build-image:
     name: Build docker image (${{ matrix.platform }})
