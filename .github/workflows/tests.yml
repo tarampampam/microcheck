@@ -43,7 +43,6 @@ jobs:
           - {arch: arm64, runner: macos-14} # Apple Silicon runner
     steps:
       - uses: actions/checkout@v6
-      - run: brew install cmake
       - run: make CC=clang C_LDFLAGS_EXTRA="-arch ${{ matrix.arch }}"
       - run: ls -lh ./build/bin/
       - run: |
