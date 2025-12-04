@@ -10,9 +10,9 @@ C_WARNING_FLAGS  = -Wall -Wextra -Werror -Wpedantic -Wformat=2 -Wformat-security
 C_STRIP_FLAGS    = -s -fno-asynchronous-unwind-tables -fno-ident
 C_LDFLAGS_EXTRA ?= -static
 C_LDFLAGS        = -Wl,--gc-sections -Wl,--as-needed -Wl,-O1 -Wl,--strip-all \
--Wl,--build-id=none -Wl,--hash-style=gnu $(C_LDFLAGS_EXTRA)
+	-Wl,--build-id=none -Wl,--hash-style=gnu $(C_LDFLAGS_EXTRA)
 STRIP_FLAGS      = -s -R .comment -R .gnu.version -R .note -R .note.ABI-tag \
--R .note.gnu.build-id -R .gnu.hash -R .eh_frame -R .eh_frame_hdr
+	-R .note.gnu.build-id -R .gnu.hash -R .eh_frame -R .eh_frame_hdr
 
 ifeq ($(shell uname -s),Darwin) # macOS linker flags (https://github.com/tarampampam/microcheck/issues/11)
 	C_LDFLAGS   = -Wl,-dead_strip
