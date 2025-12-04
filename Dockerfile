@@ -12,24 +12,25 @@ ARG APP_VERSION="0.0.0"
 
 # build the binaries using gcc (Alpine already uses musl AFAIK)
 RUN set -x \
+    && make clean \
     && make CC=gcc APP_VERSION="$APP_VERSION" \
-    && ./httpcheck --help \
-    && ./httpscheck --help \
-    && ./portcheck --help \
-    && ./parallel --help \
-    && ./pidcheck --help \
-    && ls -lh .
+    && ./build/bin/httpcheck --help \
+    && ./build/bin/httpscheck --help \
+    && ./build/bin/portcheck --help \
+    && ./build/bin/parallel --help \
+    && ./build/bin/pidcheck --help \
+    && ls -lh ./build/bin
 
 WORKDIR /tmp/rootfs
 
 # prepare the rootfs for scratch
 RUN set -x \
     && mkdir -p ./bin ./etc \
-    && mv /src/httpcheck ./bin/httpcheck \
-    && mv /src/httpscheck ./bin/httpscheck \
-    && mv /src/portcheck ./bin/portcheck \
-    && mv /src/parallel ./bin/parallel \
-    && mv /src/pidcheck ./bin/pidcheck \
+    && mv /src/build/bin/httpcheck ./bin/httpcheck \
+    && mv /src/build/bin/httpscheck ./bin/httpscheck \
+    && mv /src/build/bin/portcheck ./bin/portcheck \
+    && mv /src/build/bin/parallel ./bin/parallel \
+    && mv /src/build/bin/pidcheck ./bin/pidcheck \
     && echo 'nobody:x:10001:10001::/nonexistent:/sbin/nologin' > ./etc/passwd \
     && echo 'nogroup:x:10001:' > ./etc/group
 
@@ -38,8 +39,8 @@ FROM scratch AS runtime
 
 ARG APP_VERSION="0.0.0"
 
+# docs: <https://github.com/opencontainers/image-spec/blob/master/annotations.md>
 LABEL \
-    # Docs: <https://github.com/opencontainers/image-spec/blob/master/annotations.md>
     org.opencontainers.image.title="microcheck" \
     org.opencontainers.image.description="Lightweight health check utilities for Docker containers" \
     org.opencontainers.image.url="https://github.com/tarampampam/microcheck" \

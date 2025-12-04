@@ -2,6 +2,6 @@
 *
 
 ## Except the following files and directories
-!/src
+!/apps
+!/lib
 !/Makefile
-!/patches
