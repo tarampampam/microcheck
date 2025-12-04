@@ -51,14 +51,11 @@
 #define EXIT_SUCCESS_CODE 0
 #define EXIT_FAILURE_CODE 1
 
-#define BUFFER_SIZE 4096 // TODO: remove
 #define MAX_HEADER_LEN 512
 
 /* HTTP status code ranges */
 #define HTTP_STATUS_SUCCESS_MIN 200
 #define HTTP_STATUS_SUCCESS_MAX 299
-#define HTTP_STATUS_MIN 100 // TODO: remove
-#define HTTP_STATUS_MAX 999 // TODO: remove
 
 /* Timeout limits (1 second to 1 hour) */
 #define MIN_TIMEOUT 1
@@ -343,13 +340,6 @@ static bool set_socket_timeout(int sockfd, int timeout) {
  */
 static inline bool is_success_status(const long status) {
   return status >= HTTP_STATUS_SUCCESS_MIN && status <= HTTP_STATUS_SUCCESS_MAX;
-}
-
-/**
- * Check if HTTP status code is valid.
- */
-static inline bool is_valid_status(const long status) { // TODO: del
-  return status >= HTTP_STATUS_MIN && status <= HTTP_STATUS_MAX;
 }
 
 /**
