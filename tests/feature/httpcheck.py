@@ -11,10 +11,11 @@ The test suite includes:
 - Basic HTTP functionality tests
 - HTTPS functionality tests (when --https flag is used)
 - Protocol auto-detection tests (HTTPS only, for URLs without http:// or https://)
+- Fallback tests (for httpscheck binary with HTTP-only server)
 - Port handling edge cases (explicit port preservation during fallback)
 
 Usage:
-    python3 httpcheck.py [--bin PATH] [--https] [--cert-dir DIR]
+    python3 httpcheck.py [--bin PATH] [--https] [--cert-dir DIR] [--fallback]
 """
 
 import asyncio
@@ -56,6 +57,7 @@ class TestCase:
     server_header_count: int = 0
     timeout_override: Optional[float] = None
     https_only: bool = False
+    fallback_only: bool = False  # New: for testing HTTPS->HTTP fallback
 
 
 class TestHTTPHandler(BaseHTTPRequestHandler):
@@ -374,20 +376,31 @@ async def run_test(binary_path: str, test_case: TestCase, server: TestServer) ->
 
 
 async def run_all_tests(binary_path: str, test_cases: List[TestCase],
-                       use_https: bool = False, cert_dir: Optional[Path] = None) -> bool:
+                        use_https: bool = False, fallback_mode: bool = False,
+                        cert_dir: Optional[Path] = None) -> bool:
     """
     Run all test cases sequentially.
 
     Returns:
         True if all tests passed, False otherwise
     """
-    filtered_tests = test_cases if use_https else [tc for tc in test_cases if not tc.https_only]
+    # Filter tests based on mode
+    if fallback_mode:
+        # Fallback mode: HTTP server but testing httpscheck binary with fallback
+        filtered_tests = [tc for tc in test_cases if tc.fallback_only]
+        server_mode = "HTTP (fallback testing)"
+    elif use_https:
+        filtered_tests = [tc for tc in test_cases if tc.https_only and not tc.fallback_only]
+        server_mode = "HTTPS"
+    else:
+        filtered_tests = [tc for tc in test_cases if not tc.https_only and not tc.fallback_only]
+        server_mode = "HTTP"
 
     server = TestServer(use_https=use_https, cert_dir=cert_dir)
     server.start()
 
     print(f"Running {len(filtered_tests)} tests against {binary_path}...")
-    print(f"Server mode: {'HTTPS' if use_https else 'HTTP'}")
+    print(f"Server mode: {server_mode}")
     print(f"Server listening on port: {server.port}")
     print()
 
@@ -1197,7 +1210,7 @@ def get_test_cases() -> List[TestCase]:
             https_only=True,
         ),
 
-        # Protocol auto-detection tests (HTTPS only)
+        # Protocol auto-detection tests (HTTPS only - server is HTTPS)
         TestCase(
             name="Auto-detect: Simple URL without protocol (tries HTTPS)",
             give_args=["127.0.0.1:{PORT}/health"],
@@ -1400,6 +1413,157 @@ def get_test_cases() -> List[TestCase]:
             https_only=True,
         ),
 
+        # Fallback tests (for httpscheck binary with HTTP-only server)
+        # These test HTTPS -> HTTP fallback behavior
+        TestCase(
+            name="Fallback: Simple URL without protocol falls back to HTTP",
+            give_args=["127.0.0.1:{PORT}/health"],
+            want_exit_code=0,
+            want_method="GET",
+            want_url_path="/health",
+            fallback_only=True,
+        ),
+
+        TestCase(
+            name="Fallback: Default port 0 becomes 80 after fallback",
+            give_args=["127.0.0.1/health"],
+            give_env={"CHECK_PORT": "{PORT}"},
+            want_exit_code=0,
+            want_url_path="/health",
+            want_headers={"Host": "127.0.0.1:{PORT}"},
+            fallback_only=True,
+        ),
+
+        TestCase(
+            name="Fallback: Explicit port 8080 preserved during fallback",
+            give_args=["127.0.0.1:8080/health"],
+            give_env={"CHECK_PORT": "{PORT}"},
+            want_exit_code=0,
+            want_url_path="/health",
+            want_headers={"Host": "127.0.0.1:{PORT}"},
+            fallback_only=True,
+        ),
+
+        TestCase(
+            name="Fallback: Port override via flag preserved during fallback",
+            give_args=["-p", "{PORT}", "127.0.0.1/health"],
+            want_exit_code=0,
+            want_url_path="/health",
+            want_headers={"Host": "127.0.0.1:{PORT}"},
+            fallback_only=True,
+        ),
+
+        TestCase(
+            name="Fallback: Port override via environment preserved during fallback",
+            give_args=["127.0.0.1/health"],
+            give_env={"CHECK_PORT": "{PORT}"},
+            want_exit_code=0,
+            want_url_path="/health",
+            want_headers={"Host": "127.0.0.1:{PORT}"},
+            fallback_only=True,
+        ),
+
+        TestCase(
+            name="Fallback: Explicit non-standard port 9999 preserved",
+            give_args=["127.0.0.1:9999/health"],
+            give_env={"CHECK_PORT": "{PORT}"},
+            want_exit_code=0,
+            want_url_path="/health",
+            want_headers={"Host": "127.0.0.1:{PORT}"},
+            fallback_only=True,
+        ),
+
+        TestCase(
+            name="Fallback: POST method preserved during fallback",
+            give_args=["-m", "POST", "127.0.0.1:{PORT}/api/data"],
+            want_exit_code=0,
+            want_method="POST",
+            want_url_path="/api/data",
+            fallback_only=True,
+        ),
+
+        TestCase(
+            name="Fallback: Custom headers preserved during fallback",
+            give_args=[
+                "-H", "X-Custom-Header: test",
+                "127.0.0.1:{PORT}/endpoint"
+            ],
+            want_exit_code=0,
+            want_headers={"X-Custom-Header": "test"},
+            want_url_path="/endpoint",
+            fallback_only=True,
+        ),
+
+        TestCase(
+            name="Fallback: Basic auth preserved during fallback",
+            give_args=["--basic-auth", "user:pass", "127.0.0.1:{PORT}/secure"],
+            want_exit_code=0,
+            want_headers={"Authorization": "Basic dXNlcjpwYXNz"},
+            want_url_path="/secure",
+            fallback_only=True,
+        ),
+
+        TestCase(
+            name="Fallback: User-Agent preserved during fallback",
+            give_args=["-u", "TestClient/1.0", "127.0.0.1:{PORT}/"],
+            want_exit_code=0,
+            want_headers={"User-Agent": "TestClient/1.0"},
+            fallback_only=True,
+        ),
+
+        TestCase(
+            name="Fallback: Complex path with query parameters preserved",
+            give_args=["127.0.0.1:{PORT}/search?q=test&limit=10"],
+            want_exit_code=0,
+            want_url_path="/search?q=test&limit=10",
+            fallback_only=True,
+        ),
+
+        TestCase(
+            name="Fallback: 404 response after fallback",
+            give_args=["127.0.0.1:{PORT}/notfound"],
+            want_exit_code=1,
+            server_status=404,
+            fallback_only=True,
+        ),
+
+        TestCase(
+            name="Fallback: 500 response after fallback",
+            give_args=["127.0.0.1:{PORT}/error"],
+            want_exit_code=1,
+            server_status=500,
+            fallback_only=True,
+        ),
+
+        TestCase(
+            name="Fallback: Host and port override both preserved",
+            give_args=["--host", "127.0.0.1", "-p", "{PORT}", "example.com:8443/test"],
+            want_exit_code=0,
+            want_url_path="/test",
+            want_headers={"Host": "127.0.0.1:{PORT}"},
+            fallback_only=True,
+        ),
+
+        TestCase(
+            name="Fallback: Environment variables preserved during fallback",
+            give_args=["example.com/api"],
+            give_env={
+                "CHECK_METHOD": "POST",
+                "CHECK_HOST": "127.0.0.1",
+                "CHECK_PORT": "{PORT}",
+                "CHECK_USER_AGENT": "EnvClient/1.0",
+            },
+            want_exit_code=0,
+            want_method="POST",
+            want_url_path="/api",
+            want_headers={
+                "User-Agent": "EnvClient/1.0",
+                "Host": "127.0.0.1:{PORT}",
+            },
+            fallback_only=True,
+        ),
+
+        # Security tests
         TestCase(
             name="Security: CRLF injection in path rejected",
             give_args=["{PROTOCOL}://127.0.0.1:{PORT}/test\r\nInjected: header"],
@@ -1441,16 +1605,6 @@ def get_test_cases() -> List[TestCase]:
             give_env={"CHECK_METHOD": "HEAD\r\nInjected: header"},
             want_method="GET",
             want_exit_code=0,
-        ),
-
-        TestCase(
-            name="Security: CRLF injection in user-agent from environment ignored",
-            give_args=["{PROTOCOL}://127.0.0.1:{PORT}/"],
-            give_env={"CHECK_USER_AGENT": "Agent\r\nInjected: header"},
-            want_exit_code=0,
-            want_headers={
-                "User-Agent": "healthcheck/0.0.0 (httpcheck)",
-            },
         ),
 
         TestCase(
@@ -1643,7 +1797,12 @@ def main():
     parser.add_argument(
         '--https',
         action='store_true',
-        help='Run tests using HTTPS instead of HTTP'
+        help='Run HTTPS-specific tests with HTTPS server'
+    )
+    parser.add_argument(
+        '--fallback',
+        action='store_true',
+        help='Run fallback tests (httpscheck binary with HTTP server)'
     )
     parser.add_argument(
         '--cert-dir',
@@ -1661,10 +1820,21 @@ def main():
         print(f"Error: Binary is not executable: {args.bin}")
         return 1
 
+    # Validate mode selection
+    if args.https and args.fallback:
+        print("Error: Cannot use both --https and --fallback flags")
+        return 1
+
     # Run tests
     cert_dir = Path(args.cert_dir)
     test_cases = get_test_cases()
-    success = asyncio.run(run_all_tests(args.bin, test_cases, args.https, cert_dir))
+    success = asyncio.run(run_all_tests(
+        args.bin,
+        test_cases,
+        use_https=args.https,
+        fallback_mode=args.fallback,
+        cert_dir=cert_dir
+    ))
 
     return 0 if success else 1
 

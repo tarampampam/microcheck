@@ -17,7 +17,6 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <limits.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -30,6 +29,9 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
+
+// the next line is to enable TLS support; comment it out to disable TLS
+// #define WITH_TLS
 
 #ifdef WITH_TLS
 #include "../lib/mbedtls4/include/mbedtls/error.h"
@@ -65,17 +67,6 @@
 /* Port range validation */
 #define MIN_PORT 1
 #define MAX_PORT 65535
-
-/* HTTP protocol constants */
-#define HTTP_DEFAULT_PORT 80                             // TODO: remove
-#define HTTP_MIN_STATUS_LINE_LEN 12 /* "HTTP/1.x XXX" */ // TODO: remove
-
-#ifdef WITH_TLS
-/* HTTPS protocol constants */
-#define HTTPS_SCHEME "https://"
-#define HTTPS_SCHEME_LEN 8
-#define HTTPS_DEFAULT_PORT 443
-#endif
 
 /* Flag names */
 #define FLAG_METHOD_SHORT "m"
@@ -124,6 +115,7 @@
 #define ERR_DOMAIN_RESOLVING_ERROR "Error: failed to resolve domain name\n"
 #define ERR_BAD_REQUEST_ERROR "Error: failed to build HTTP request\n"
 #define ERR_BAD_RESPONSE_ERROR "Error: invalid HTTP response from server\n"
+#define ERR_TLS_ERROR "Error: TLS/SSL error occurred\n"
 #define ERR_REQUEST_UNSUCCESS                                                  \
   "Error: server responded with non-success status\n"
 #define ERR_UNKNOWN_ERROR "Error: unknown error occurred\n"
@@ -373,307 +365,10 @@ typedef enum {
   REQUEST_BAD_REQUEST_ERROR,
   REQUEST_BAD_RESPONSE_ERROR,
   REQUEST_INTERRUPTED_ERROR,
-  REQUEST_HTTP_ERROR,       // TODO: delete
-  REQUEST_CONNECTION_ERROR, // TODO: delete
+  REQUEST_TLS_ERROR, // mbedTLS-specific TLS error
   REQUEST_UNSUCCESS,
   REQUEST_UNKNOWN_ERROR,
 } request_result_t;
-
-#ifdef WITH_TLS
-/**
- * Perform HTTPS request using mbedTLS.
- * Returns REQUEST_SUCCESS for 2xx responses, REQUEST_HTTP_ERROR for non-2xx
- * responses, and REQUEST_CONNECTION_ERROR for connection/TLS errors.
- */
-static request_result_t https_request(const char *host, int port,
-                                      const char *path, const char *method,
-                                      const char *user_agent, int timeout,
-                                      char **headers, size_t header_count,
-                                      const char *basic_auth) {
-  int ret;
-  request_result_t result = REQUEST_CONNECTION_ERROR;
-  mbedtls_ssl_context ssl;
-  mbedtls_ssl_config conf;
-  mbedtls_net_context server_fd;
-  char port_str[8];
-
-  // Initialize structures
-  mbedtls_net_init(&server_fd);
-  mbedtls_ssl_init(&ssl);
-  mbedtls_ssl_config_init(&conf);
-
-  // Initialize PSA Crypto (required in mbedTLS 4.0)
-  ret = psa_crypto_init();
-  if (ret != PSA_SUCCESS) {
-    fputs("Error: PSA crypto initialization failed: -0x", stderr);
-    fprintf(stderr, "%04x\n", (unsigned int)-ret);
-    goto cleanup;
-  }
-
-  // Convert port to string for mbedtls_net_connect
-  snprintf(port_str, sizeof(port_str), "%d", port);
-
-  // Connect to server
-  ret = mbedtls_net_connect(&server_fd, host, port_str, MBEDTLS_NET_PROTO_TCP);
-  if (ret != 0) {
-    if (errno == EINTR) {
-      fputs(ERR_INTERRUPTED, stderr);
-    } else {
-      fputs("Error: failed to connect to ", stderr);
-      fputs(host, stderr);
-      fputc(':', stderr);
-      fprintf(stderr, "%d", port);
-      fputs(": -0x", stderr);
-      fprintf(stderr, "%04x\n", (unsigned int)-ret);
-    }
-    goto cleanup;
-  }
-
-  // Set socket timeout
-  struct timeval tv;
-  tv.tv_sec = timeout;
-  tv.tv_usec = 0;
-  if (setsockopt(server_fd.fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0 ||
-      setsockopt(server_fd.fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) < 0) {
-    fputs("Error: failed to set socket timeout: ", stderr);
-    fputs(strerror(errno), stderr);
-    fputc('\n', stderr);
-    goto cleanup;
-  }
-
-  // Setup SSL/TLS configuration
-  ret = mbedtls_ssl_config_defaults(&conf, MBEDTLS_SSL_IS_CLIENT,
-                                    MBEDTLS_SSL_TRANSPORT_STREAM,
-                                    MBEDTLS_SSL_PRESET_DEFAULT);
-  if (ret != 0) {
-    fputs("Error: mbedtls_ssl_config_defaults failed: -0x", stderr);
-    fprintf(stderr, "%04x\n", (unsigned int)-ret);
-    goto cleanup;
-  }
-
-  // Disable certificate verification (as requested - accept self-signed certs)
-  mbedtls_ssl_conf_authmode(&conf, MBEDTLS_SSL_VERIFY_NONE);
-
-  // Setup SSL context
-  ret = mbedtls_ssl_setup(&ssl, &conf);
-  if (ret != 0) {
-    fputs("Error: mbedtls_ssl_setup failed: -0x", stderr);
-    fprintf(stderr, "%04x\n", (unsigned int)-ret);
-    goto cleanup;
-  }
-
-  // Set hostname for SNI (Server Name Indication)
-  ret = mbedtls_ssl_set_hostname(&ssl, host);
-  if (ret != 0) {
-    fputs("Error: mbedtls_ssl_set_hostname failed: -0x", stderr);
-    fprintf(stderr, "%04x\n", (unsigned int)-ret);
-    goto cleanup;
-  }
-
-  // Set the underlying I/O functions
-  mbedtls_ssl_set_bio(&ssl, &server_fd, mbedtls_net_send, mbedtls_net_recv,
-                      NULL);
-
-  // Perform SSL/TLS handshake
-  while ((ret = mbedtls_ssl_handshake(&ssl)) != 0) {
-    if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
-      if (interrupted) {
-        fputs(ERR_INTERRUPTED, stderr);
-      } else {
-        char error_buf[100];
-        mbedtls_strerror(ret, error_buf, sizeof(error_buf));
-        fputs("Error: mbedtls_ssl_handshake failed: ", stderr);
-        fputs(error_buf, stderr);
-        fputs(" (-0x", stderr);
-        fprintf(stderr, "%04x)\n", (unsigned int)-ret);
-      }
-      goto cleanup;
-    }
-  }
-
-  // Check for interruption after handshake
-  if (interrupted) {
-    fputs(ERR_INTERRUPTED, stderr);
-    goto cleanup;
-  }
-
-  // Build HTTP request
-  char request[BUFFER_SIZE];
-  int req_len = build_http_request(request, sizeof(request), method, path, host,
-                                   port, HTTPS_DEFAULT_PORT, user_agent,
-                                   basic_auth, headers, header_count);
-
-  if (req_len < 0) {
-    goto cleanup;
-  }
-
-  // Send HTTP request over SSL
-  size_t total_written = 0;
-  while (total_written < (size_t)req_len) {
-    ret = mbedtls_ssl_write(&ssl,
-                            (const unsigned char *)(request + total_written),
-                            (size_t)req_len - total_written);
-
-    if (ret < 0) {
-      if (ret == MBEDTLS_ERR_SSL_WANT_READ ||
-          ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
-        continue;
-      }
-
-      if (interrupted) {
-        fputs(ERR_INTERRUPTED, stderr);
-      } else {
-        char error_buf[100];
-        mbedtls_strerror(ret, error_buf, sizeof(error_buf));
-        fputs("Error: mbedtls_ssl_write failed: ", stderr);
-        fputs(error_buf, stderr);
-        fputs(" (-0x", stderr);
-        fprintf(stderr, "%04x)\n", (unsigned int)-ret);
-      }
-
-      goto cleanup;
-    }
-
-    total_written += (size_t)ret;
-  }
-
-  // Check for interruption after sending
-  if (interrupted) {
-    fputs(ERR_INTERRUPTED, stderr);
-    goto cleanup;
-  }
-
-  // Receive HTTP response
-  char response[BUFFER_SIZE];
-  size_t total_read = 0;
-  bool status_line_received = false;
-
-  while (total_read < sizeof(response) - 1) {
-    ret = mbedtls_ssl_read(&ssl, (unsigned char *)(response + total_read),
-                           sizeof(response) - 1 - total_read);
-
-    if (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
-      continue;
-    }
-
-    if (ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || ret == 0) {
-      // connection closed cleanly
-      break;
-    }
-
-    if (ret < 0) {
-      // If we got a timeout but already have the status line, that's OK
-      // (server closed connection after sending response)
-      if (ret == MBEDTLS_ERR_SSL_TIMEOUT && status_line_received) {
-        break;
-      }
-
-      // TLS 1.3 NewSessionTicket is sent after handshake, treat as non-fatal
-      // if we already have the status line
-      if (ret == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET) {
-        if (status_line_received) {
-          break;
-        }
-        // If we haven't received status line yet, continue reading
-        continue;
-      }
-
-      if (interrupted) {
-        fputs(ERR_INTERRUPTED, stderr);
-      } else {
-        char error_buf[100];
-        mbedtls_strerror(ret, error_buf, sizeof(error_buf));
-        fputs("Error: mbedtls_ssl_read failed: ", stderr);
-        fputs(error_buf, stderr);
-        fputs(" (-0x", stderr);
-        fprintf(stderr, "%04x)\n", (unsigned int)-ret);
-      }
-
-      goto cleanup;
-    }
-
-    total_read += (size_t)ret;
-
-    // Check if we have the status line - that's all we need
-    if (total_read >= HTTP_MIN_STATUS_LINE_LEN) {
-      // Look for end of status line
-      response[total_read] = '\0';
-      if (strchr(response, '\n') != NULL) {
-        status_line_received = true;
-        break;
-      }
-    }
-  }
-
-  if (total_read == 0) {
-    fputs("Error: connection closed by server\n", stderr);
-    goto cleanup;
-  }
-
-  response[total_read] = '\0';
-
-  // Validate minimum response length
-  if (total_read < HTTP_MIN_STATUS_LINE_LEN) {
-    fputs("Error: response too short\n", stderr);
-    goto cleanup;
-  }
-
-  // Validate HTTP response format
-  if (strncmp(response, "HTTP/1.", 7) != 0) {
-    fputs("Error: invalid HTTP response (expected HTTP/1.x)\n", stderr);
-    goto cleanup;
-  }
-
-  // Locate status code in response
-  char *status_start = strchr(response, ' ');
-  if (status_start == NULL) {
-    fputs("Error: malformed HTTP response (no status code)\n", stderr);
-    goto cleanup;
-  }
-  status_start++; // skip space
-
-  // Parse status code with strict validation
-  char *endptr;
-  errno = 0;
-  long status = strtol(status_start, &endptr, 10);
-
-  if (errno != 0 || endptr == status_start) {
-    fputs("Error: invalid HTTP status code\n", stderr);
-    goto cleanup;
-  }
-
-  // Validate status code range
-  if (!is_valid_status(status)) {
-    fputs("Error: HTTP status code out of range: ", stderr);
-    fprintf(stderr, "%ld\n", status);
-    result = REQUEST_CONNECTION_ERROR; // Invalid response format
-    goto cleanup;
-  }
-
-  // Check if status is in success range (2xx)
-  if (!is_success_status(status)) {
-    fputs("Error: HTTP status ", stderr);
-    fprintf(stderr, "%ld", status);
-    fputs(" (expected 2xx)\n", stderr);
-    result = REQUEST_HTTP_ERROR; // Valid HTTP response but non-2xx
-    goto cleanup;
-  }
-
-  // Success - received 2xx status
-  result = REQUEST_SUCCESS;
-
-cleanup:
-  // Close SSL connection
-  mbedtls_ssl_close_notify(&ssl);
-
-  // Free resources
-  mbedtls_net_free(&server_fd);
-  mbedtls_ssl_free(&ssl);
-  mbedtls_ssl_config_free(&conf);
-
-  return result;
-}
-#endif
 
 /**
  * Resolve hostname to IPv4 address.
@@ -735,10 +430,295 @@ static bool resolve_host(const char *host, struct in_addr *addr) {
   return true;
 }
 
+#ifdef WITH_TLS
+/**
+ * Perform HTTPS request using mbedTLS.
+ * Returns REQUEST_SUCCESS for 2xx responses.
+ */
+static request_result_t https_request(const char *method,
+                                      const http_url_parsed_t *url,
+                                      const http_headers_t *headers,
+                                      const int timeout) {
+  char *host = malloc(url->host_len + 1);
+  if (!host) {
+    return REQUEST_ALLOCATION_ERROR;
+  }
+
+  memcpy(host, url->host, url->host_len);
+  host[url->host_len] = '\0';
+
+  request_result_t result = REQUEST_UNKNOWN_ERROR;
+
+  mbedtls_ssl_context ssl;
+  mbedtls_ssl_config conf;
+  mbedtls_net_context server_fd;
+
+  mbedtls_net_init(&server_fd);
+  mbedtls_ssl_init(&ssl);
+  mbedtls_ssl_config_init(&conf);
+
+  // initialize PSA Crypto
+  int ret = psa_crypto_init();
+  if (ret != PSA_SUCCESS) {
+    result = REQUEST_TLS_ERROR;
+
+    goto cleanup;
+  }
+
+  // resolve host first
+  struct in_addr addr;
+  if (!resolve_host(host, &addr)) {
+    result = REQUEST_DOMAIN_RESOLVING_ERROR;
+
+    goto cleanup;
+  }
+
+  if (interrupted) {
+    result = REQUEST_INTERRUPTED_ERROR;
+
+    goto cleanup;
+  }
+
+  // create socket manually for non-blocking connect
+  server_fd.fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (server_fd.fd < 0) {
+    result = REQUEST_SOCKET_ERROR;
+
+    goto cleanup;
+  }
+
+  // set non-blocking mode
+  const int flags = fcntl(server_fd.fd, F_GETFL, 0);
+  fcntl(server_fd.fd, F_SETFL, flags | O_NONBLOCK);
+
+  // prepare address
+  struct sockaddr_in server_addr;
+  memset(&server_addr, 0, sizeof(server_addr));
+  server_addr.sin_family = AF_INET;
+  server_addr.sin_port = htons((uint16_t)url->port);
+  server_addr.sin_addr = addr;
+
+  // establish connection
+  if (connect(server_fd.fd, (struct sockaddr *)&server_addr,
+              sizeof(server_addr)) < 0) {
+    if (errno != EINPROGRESS) {
+      result = REQUEST_SOCKET_ERROR;
+
+      goto cleanup;
+    }
+
+    // wait for connection with timeout
+    struct pollfd pfd = {.fd = server_fd.fd, .events = POLLOUT};
+    const int poll_result = poll(&pfd, 1, timeout * 1000);
+
+    if (poll_result < 0) {
+      result = (errno == EINTR && interrupted) ? REQUEST_INTERRUPTED_ERROR
+                                               : REQUEST_SOCKET_ERROR;
+
+      goto cleanup;
+    }
+
+    if (poll_result == 0) {
+      result = REQUEST_TIMEOUT_ERROR;
+
+      goto cleanup;
+    }
+
+    // check for socket errors
+    int so_error;
+    socklen_t len = sizeof(so_error);
+    getsockopt(server_fd.fd, SOL_SOCKET, SO_ERROR, &so_error, &len);
+    if (so_error != 0) {
+      result = REQUEST_SOCKET_ERROR;
+
+      goto cleanup;
+    }
+  }
+
+  if (interrupted) {
+    result = REQUEST_INTERRUPTED_ERROR;
+
+    goto cleanup;
+  }
+
+  // restore blocking mode and set timeouts
+  fcntl(server_fd.fd, F_SETFL, flags);
+
+  struct timeval tv;
+  tv.tv_sec = timeout;
+  tv.tv_usec = 0;
+  setsockopt(server_fd.fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  setsockopt(server_fd.fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+  // setup SSL/TLS configuration
+  ret = mbedtls_ssl_config_defaults(&conf, MBEDTLS_SSL_IS_CLIENT,
+                                    MBEDTLS_SSL_TRANSPORT_STREAM,
+                                    MBEDTLS_SSL_PRESET_DEFAULT);
+  if (ret != 0) {
+    result = REQUEST_TLS_ERROR;
+
+    goto cleanup;
+  }
+
+  // disable certificate verification
+  mbedtls_ssl_conf_authmode(&conf, MBEDTLS_SSL_VERIFY_NONE);
+
+  ret = mbedtls_ssl_setup(&ssl, &conf);
+  if (ret != 0) {
+    result = REQUEST_TLS_ERROR;
+
+    goto cleanup;
+  }
+
+  ret = mbedtls_ssl_set_hostname(&ssl, host);
+  if (ret != 0) {
+    result = REQUEST_TLS_ERROR;
+
+    goto cleanup;
+  }
+
+  mbedtls_ssl_set_bio(&ssl, &server_fd, mbedtls_net_send, mbedtls_net_recv,
+                      NULL);
+
+  // perform SSL/TLS handshake
+  while ((ret = mbedtls_ssl_handshake(&ssl)) != 0) {
+    if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
+      result = (interrupted) ? REQUEST_INTERRUPTED_ERROR : REQUEST_TLS_ERROR;
+
+      goto cleanup;
+    }
+
+    if (interrupted) {
+      result = REQUEST_INTERRUPTED_ERROR;
+
+      goto cleanup;
+    }
+  }
+
+  // build HTTP request
+  http_request_build_result_t request =
+      http_build_request(method, url, headers);
+  if (request.code != HTTP_REQUEST_BUILD_OK) {
+    result = REQUEST_BAD_REQUEST_ERROR;
+
+    goto cleanup;
+  }
+
+  // send HTTP request over SSL
+  size_t total_sent = 0;
+  while (total_sent < request.length) {
+    if (interrupted) {
+      result = REQUEST_INTERRUPTED_ERROR;
+      http_free_build_request_result(&request);
+
+      goto cleanup;
+    }
+
+    ret = mbedtls_ssl_write(
+        &ssl, (const unsigned char *)(request.buffer + total_sent),
+        request.length - total_sent);
+
+    if (ret < 0) {
+      if (ret == MBEDTLS_ERR_SSL_WANT_READ ||
+          ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
+        continue;
+      }
+
+      result = REQUEST_TLS_ERROR;
+      http_free_build_request_result(&request);
+
+      goto cleanup;
+    }
+
+    total_sent += (size_t)ret;
+  }
+
+  http_free_build_request_result(&request);
+
+  // read at least status line
+  char resp_buf[32];
+  size_t total_read = 0;
+
+  while (total_read < sizeof(resp_buf) - 1) {
+    if (interrupted) {
+      result = REQUEST_INTERRUPTED_ERROR;
+      goto cleanup;
+    }
+
+    ret = mbedtls_ssl_read(&ssl, (unsigned char *)(resp_buf + total_read),
+                           sizeof(resp_buf) - 1 - total_read);
+
+    if (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
+      continue;
+    }
+
+    if (ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || ret == 0) {
+      break; // connection closed
+    }
+
+    // TLS 1.3 sends NewSessionTicket after handshake - not an error
+    if (ret == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET) {
+      if (total_read >= 12) {
+        break; // we have enough data
+      }
+      continue; // keep reading
+    }
+
+    if (ret < 0) {
+      result = REQUEST_TLS_ERROR;
+      goto cleanup;
+    }
+
+    total_read += (size_t)ret;
+
+    // check if we have enough for status line
+    if (total_read >= 12) {
+      resp_buf[total_read] = '\0';
+      // look for end of status line
+      if (strchr(resp_buf, '\n') != NULL) {
+        break;
+      }
+    }
+  }
+
+  // ensure we got minimum data
+  if (total_read < 12) {
+    result = REQUEST_BAD_RESPONSE_ERROR;
+    goto cleanup;
+  }
+
+  // parse status code
+  const int status_code = http_get_response_status_code(resp_buf);
+  if (status_code < 0) {
+    result = REQUEST_BAD_RESPONSE_ERROR;
+
+    goto cleanup;
+  }
+
+  // drain remaining data
+  while (1) {
+    char trash[1024];
+    ret = mbedtls_ssl_read(&ssl, (unsigned char *)trash, sizeof(trash));
+    if (ret <= 0 || interrupted) {
+      break;
+    }
+  }
+
+  result = is_success_status(status_code) ? REQUEST_SUCCESS : REQUEST_UNSUCCESS;
+
+cleanup:
+  mbedtls_ssl_close_notify(&ssl);
+  mbedtls_net_free(&server_fd);
+  mbedtls_ssl_free(&ssl);
+  mbedtls_ssl_config_free(&conf);
+  free(host);
+
+  return result;
+}
+#endif
+
 /**
  * Perform HTTP request and validate response status code.
- * Returns REQUEST_SUCCESS for 2xx responses, REQUEST_HTTP_ERROR for non-2xx
- * responses, and REQUEST_CONNECTION_ERROR for connection errors.
  */
 static request_result_t http_request(const char *method,
                                      const http_url_parsed_t *url,
@@ -1344,45 +1324,40 @@ int main(const int argc, const char *argv[]) {
   request_result_t result;
 
 #ifdef WITH_TLS
-  if (protocol_mode == 1) {
-    // Explicit HTTPS
-    result = https_request(host, port, path, method_flag->value.string_value,
-                           user_agent_flag->value.string_value, timeout_sec,
-                           header_flag->value.strings_value.list,
-                           header_flag->value.strings_value.count,
-                           basic_auth_flag->value.string_value);
-  } else if (protocol_mode == 0) {
-    // Explicit HTTP
-    result = http_request(host, port, path, method_flag->value.string_value,
-                          user_agent_flag->value.string_value, timeout_sec,
-                          header_flag->value.strings_value.list,
-                          header_flag->value.strings_value.count,
-                          basic_auth_flag->value.string_value);
+  if (url.proto == PROTO_HTTPS) {
+    // explicit HTTPS
+    result = https_request(method_flag->value.string_value, &url, headers,
+                           timeout_sec);
+  } else if (url.proto == PROTO_HTTP) {
+    // explicit HTTP
+    result = http_request(method_flag->value.string_value, &url, headers,
+                          timeout_sec);
   } else {
-    // Auto-detect: try HTTPS first, fallback to HTTP ONLY on TLS connection
-    // failure
-    result = https_request(host, port, path, method_flag->value.string_value,
-                           user_agent_flag->value.string_value, timeout_sec,
-                           header_flag->value.strings_value.list,
-                           header_flag->value.strings_value.count,
-                           basic_auth_flag->value.string_value);
+    // auto-detect: try HTTPS first with port 443, fallback to HTTP with port 80
+    http_url_parsed_t https_url = url;
 
-    // Only fallback to HTTP if we had a connection/TLS error (not HTTP status
-    // error)
-    if (result == REQUEST_CONNECTION_ERROR) {
-      // Adjust port from HTTPS default to HTTP default only if:
-      // 1. Port was not explicitly specified in URL, AND
-      // 2. Port was not overridden via --port flag or env variable
-      if (!explicit_port_in_url && port_override == -1 &&
-          port == HTTPS_DEFAULT_PORT) {
-        port = HTTP_DEFAULT_PORT;
+    // set HTTPS default port (443) if no port was specified/overridden
+    if (port_override == -1 && parsed_url.port == 0) {
+      https_url.port = 443;
+    }
+
+    result = https_request(method_flag->value.string_value, &https_url, headers,
+                           timeout_sec);
+
+    // fallback to HTTP only on connection/TLS errors (not HTTP status errors)
+    if (result == REQUEST_SOCKET_ERROR || result == REQUEST_TLS_ERROR ||
+        result == REQUEST_TIMEOUT_ERROR ||
+        result == REQUEST_DOMAIN_RESOLVING_ERROR) {
+
+      http_url_parsed_t http_url = url;
+
+      // set HTTP default port (80) if no port was specified/overridden
+      if (port_override == -1 && parsed_url.port == 0) {
+        http_url.port = 80;
       }
 
-      result = http_request(host, port, path, method_flag->value.string_value,
-                            user_agent_flag->value.string_value, timeout_sec,
-                            header_flag->value.strings_value.list,
-                            header_flag->value.strings_value.count,
-                            basic_auth_flag->value.string_value);
+      result = http_request(method_flag->value.string_value, &http_url, headers,
+                            timeout_sec);
     }
   }
 #else
@@ -1414,6 +1389,9 @@ int main(const int argc, const char *argv[]) {
     break;
   case REQUEST_INTERRUPTED_ERROR:
     fputs(ERR_INTERRUPTED, stderr);
+    break;
+  case REQUEST_TLS_ERROR:
+    fputs(ERR_TLS_ERROR, stderr);
     break;
   case REQUEST_UNSUCCESS:
     fputs(ERR_REQUEST_UNSUCCESS, stderr);

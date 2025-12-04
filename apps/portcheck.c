@@ -331,10 +331,7 @@ static bool wait_for_connect(const int sockfd, const int timeout_sec) {
     return false;
   }
 
-  struct pollfd pfd = {
-    .fd = sockfd,
-    .events = POLLOUT
-  };
+  struct pollfd pfd = {.fd = sockfd, .events = POLLOUT};
 
   const int ret = poll(&pfd, 1, timeout_sec * 1000);
 

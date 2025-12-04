@@ -91,20 +91,20 @@ code (but with different build flags).
 
 ```
 Options:
-  -h, --help               Show this help message
-      --host               Override hostname from URL (env: CHECK_HOST)
-      --host-env           Change env variable name for --host (current: CHECK_HOST)
-  -p, --port               Override port from URL (env: CHECK_PORT)
-      --port-env           Change env variable name for --port (current: CHECK_PORT)
-  -m, --method             HTTP method (env: CHECK_METHOD) (default: GET)
-      --method-env         Change env variable name for --method (current: CHECK_METHOD)
-  -u, --user-agent         User-Agent header (env: CHECK_USER_AGENT) (default: healthcheck/0.0.0 (httpcheck))
-      --user-agent-env     Change env variable name for --user-agent (current: CHECK_USER_AGENT)
-  -H, --header             Add custom HTTP header (can be used multiple times)
-      --basic-auth         Basic auth credentials (username:password, env: CHECK_BASIC_AUTH)
-      --basic-auth-env     Change env variable name for --basic-auth (current: CHECK_BASIC_AUTH)
-  -t, --timeout            Request timeout in seconds (env: CHECK_TIMEOUT) (default: 5)
-      --timeout-env        Change env variable name for --timeout (current: CHECK_TIMEOUT)
+  -h, --help           Show this help message
+  -m, --method         HTTP method to use (default: "GET") [$CHECK_METHOD]
+      --method-env     Change env variable name for --method
+  -u, --user-agent     User-Agent header value (default: "healthcheck/0.0.0 (httpscheck)") [$CHECK_USER_AGENT]
+      --user-agent-env Change env variable name for --user-agent
+  -t, --timeout        Request timeout in seconds (default: "5") [$CHECK_TIMEOUT]
+      --timeout-env    Change env variable name for --timeout
+  -H, --header         Add custom HTTP header (can be used multiple times)
+      --basic-auth     Basic auth credentials (username:password) [$CHECK_BASIC_AUTH]
+      --basic-auth-env Change env variable name for --basic-auth
+      --host           Override hostname from URL [$CHECK_HOST]
+      --host-env       Change env variable name for --host
+  -p, --port           Override port from URL [$CHECK_PORT]
+      --port-env       Change env variable name for --port
 ```
 
 **URL Format Examples:**
@@ -133,15 +133,15 @@ determine if the port is open or closed.
 
 ```
 Options:
-  -h, --help               Show this help message
-      --tcp                Use TCP protocol (default)
-      --udp                Use UDP protocol
-      --host               Target hostname or IPv4 address (env: CHECK_HOST) (default: 127.0.0.1)
-      --host-env           Change env variable name for --host (current: CHECK_HOST)
-  -p, --port               Target port number (env: CHECK_PORT, required)
-      --port-env           Change env variable name for --port (current: CHECK_PORT)
-  -t, --timeout            Check timeout in seconds (env: CHECK_TIMEOUT) (default: 5)
-      --timeout-env        Change env variable name for --timeout (current: CHECK_TIMEOUT)
+  -h, --help        Show this help message
+      --tcp         Use TCP protocol (default)
+      --udp         Use UDP protocol
+      --host        Target hostname or IPv4 address (default: "127.0.0.1") [$CHECK_HOST]
+      --host-env    Change env variable name for --host
+  -p, --port        Target port number (required) [$CHECK_PORT]
+      --port-env    Change env variable name for --port
+  -t, --timeout     Check timeout in seconds (default: "5") [$CHECK_TIMEOUT]
+      --timeout-env Change env variable name for --timeout
 ```
 
 #### Environment Variable Overrides
@@ -169,8 +169,8 @@ and returns the failure code, ensuring fast failure detection.
 
 ```
 Options:
-  -h, --help               Show this help message
-  -j, --jobs               Limit number of parallel jobs (default: unlimited)
+  -h, --help  Show this help message
+  -j, --jobs  Limit number of parallel jobs (has no effect, kept for backward compatibility
 ```
 
 #### Argument Parsing
@@ -203,11 +203,11 @@ write their PID to a file.
 
 ```
 Options:
-  -h, --help               Show this help message
-  -f, --file               Path to PID file (env: CHECK_PIDFILE)
-      --file-env           Change env variable name for --file (current: CHECK_PIDFILE)
-  -p, --pid                Process ID to check (env: CHECK_PID)
-      --pid-env            Change env variable name for --pid (current: CHECK_PID)
+  -h, --help     Show this help message
+  -f, --file     Path to PID file [$CHECK_PIDFILE]
+      --file-env Change env variable name for --file
+  -p, --pid      Process ID to check [$CHECK_PID]
+      --pid-env  Change env variable name for --pid
 ```
 
 > [!NOTE]
