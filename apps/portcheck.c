@@ -437,8 +437,10 @@ static bool check_udp_port(const struct in_addr addr, const int port,
 
   // enable ICMP error reporting via MSG_ERRQUEUE (Linux-specific, the best
   // effort)
+#ifdef __linux__
   const int on = 1;
   setsockopt(sockfd, IPPROTO_IP, IP_RECVERR, &on, sizeof(on));
+#endif
 
   // prepare address
   struct sockaddr_in server_addr;

@@ -20,7 +20,7 @@ jobs:
     name: Check for GitLeaks
     runs-on: ubuntu-latest
     steps:
-      - {uses: actions/checkout@v4, with: {fetch-depth: 0}}
+      - {uses: actions/checkout@v6, with: {fetch-depth: 0}}
       - uses: gacts/gitleaks@v1
 
   build:
@@ -31,6 +31,23 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y make file gcc musl-tools cmake wget tar
       - run: make
       - run: make test
+
+  build-macos:
+    name: Build for macOS (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: x86_64, runner: macos-13} # Intel runner
+          - {arch: arm64, runner: macos-14} # Apple Silicon runner
+    steps:
+      - uses: actions/checkout@v6
+      - run: make CC=clang C_LDFLAGS_EXTRA="-arch ${{ matrix.arch }}"
+      - run: |
+          ls -lh ./build/bin/
+          ./build/bin/httpcheck --help # try to execute some binaries
+          ./build/bin/httpscheck --help
 
   build-image:
     name: Build docker image (${{ matrix.platform }})

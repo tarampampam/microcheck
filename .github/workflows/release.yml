@@ -73,8 +73,44 @@ jobs:
             ${{ needs.docker-image.outputs.tags }}
             ```
 
-  binary-files:
-    name: Publish the binary files (${{ matrix.platform }})
+  binary-files-macos:
+    name: Publish macOS binary files (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: x86_64, runner: macos-13} # Intel runner
+          - {arch: arm64, runner: macos-14} # Apple Silicon runner
+    steps:
+      - uses: actions/checkout@v6
+      - run: make CC=clang C_LDFLAGS_EXTRA="-arch ${{ matrix.arch }}"
+      - run: mkdir ./dist
+      - run: |
+          mv ./build/bin/httpcheck ./dist/httpcheck
+          mv ./build/bin/httpscheck ./dist/httpscheck
+          mv ./build/bin/portcheck ./dist/portcheck
+          mv ./build/bin/parallel ./dist/parallel
+          mv ./build/bin/pidcheck ./dist/pidcheck
+          cd ./dist
+          tar -czf ../release.tar.gz *
+          zip -r ../release.zip .
+      - {uses: gacts/github-slug@v1, id: filename, with: {to-slug: 'macos-${{ matrix.arch }}'}}
+      - uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ./release.tar.gz
+          asset_name: ${{ steps.filename.outputs.slug }}.tar.gz
+          tag: ${{ github.ref }}
+      - uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ./release.zip
+          asset_name: ${{ steps.filename.outputs.slug }}.zip
+          tag: ${{ github.ref }}
+
+  binary-files-linux:
+    name: Publish Linux binary files (${{ matrix.platform }})
     runs-on: ubuntu-latest
     needs: [docker-image]
     strategy:
@@ -121,7 +157,7 @@ jobs:
   generate-checksums:
     name: Generate checksums.txt
     runs-on: ubuntu-latest
-    needs: [binary-files]
+    needs: [binary-files-linux, binary-files-macos]
     steps:
       - uses: robinraju/release-downloader@v1
         with:

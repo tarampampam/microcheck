@@ -60,7 +60,8 @@ So, think of this as an alternative to:
 
 * **Statically linked**: Works in minimal containers (e.g., `scratch`, `distroless`)
 * **Pretty fast**: Written in pure `C`, compiled with `musl`
-* **Multi-arch and cross-compiled** (x86_64, ARM, etc.)
+* **Multi-arch and cross-compiled** (x86_64, ARM, etc.), even for macOS you may find precompiled binaries in
+  the releases
 * **Distributed** as single binaries (see the releases page) and Docker image
 * **Minimal size**: Optimized for small Docker images
 * **TLS support**: Uses `mbedTLS` for HTTPS (accepts self-signed certificates and does NOT verify SSL/TLS certificates)
@@ -130,6 +131,11 @@ determine if the port is open or closed.
 > Most UDP servers respond only to valid protocol requests. This tool sends nearly empty UDP datagram,
 > which may not receive a response from many services. Use UDP checks only when you are certain the target
 > will respond appropriately.
+
+> [!NOTE]
+> You need to specify the target host and port explicitly via flags or environment variables. Don't try to pass
+> them as positional arguments like `portcheck --port 80 example.com`, as this tool does not accept them that way.
+> Use `--host` and `--port` options instead - `portcheck --port 80 --host example.com`.
 
 ```
 Options:
