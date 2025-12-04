@@ -122,7 +122,7 @@ http_header_t *http_new_header(const char *name, const char *value);
  *
  * Returns NULL on allocation failure or if input is invalid.
  */
-http_header_t *http_new_basic_auth_header(const char* user_pass);
+http_header_t *http_new_basic_auth_header(const char *user_pass);
 
 /**
  * Create a new User-Agent HTTP header.
@@ -130,7 +130,7 @@ http_header_t *http_new_basic_auth_header(const char* user_pass);
  * Constructs a "User-Agent" header with the provided user agent string.
  * Returns NULL on allocation failure or if input is invalid.
  */
-http_header_t *http_new_user_agent_header(const char* user_agent);
+http_header_t *http_new_user_agent_header(const char *user_agent);
 
 /**
  * Free HTTP header structure and its fields.

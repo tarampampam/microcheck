@@ -146,7 +146,7 @@ http_header_t *http_parse_header_string(const char *header_str) {
 /**
  * Create a new HTTP Basic Authentication header from "username:password".
  */
-http_header_t *http_new_basic_auth_header(const char* user_pass) {
+http_header_t *http_new_basic_auth_header(const char *user_pass) {
   if (!user_pass || strlen(user_pass) == 0) {
     return NULL;
   }
@@ -185,7 +185,7 @@ http_header_t *http_new_basic_auth_header(const char* user_pass) {
 /**
  * Create a new User-Agent HTTP header.
  */
-http_header_t *http_new_user_agent_header(const char* user_agent) {
+http_header_t *http_new_user_agent_header(const char *user_agent) {
   if (!user_agent || strlen(user_agent) == 0) {
     return NULL;
   }

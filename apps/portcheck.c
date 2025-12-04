@@ -86,7 +86,8 @@ static const cli_app_meta_t APP_META = {
         "  " APP_NAME " --" FLAG_HOST_LONG " db.example.com --" FLAG_PORT_LONG
         " 5432 --" FLAG_TIMEOUT_LONG " 10\n"};
 
-// TODO: seema like even simple `./build/bin/portcheck --tcp --port 443 example.com` fails now
+// TODO: seema like even simple `./build/bin/portcheck --tcp --port 443
+// example.com` fails now
 
 static const cli_flag_meta_t TCP_FLAG_META = {
     .long_name = FLAG_TCP_LONG,
@@ -715,7 +716,7 @@ int main(const int argc, const char *argv[]) {
   // override host flag env variable if specified
   if (host_env_flag->value_source != FLAG_VALUE_SOURCE_DEFAULT) {
     if (cli_validate_env_name(host_env_flag->value.string_value)) {
-        host_flag->env_variable = strdup(host_env_flag->value.string_value);
+      host_flag->env_variable = strdup(host_env_flag->value.string_value);
       if (host_flag->env_variable == NULL) {
         fputs(ERR_ALLOCATION_FAILED, stderr);
 

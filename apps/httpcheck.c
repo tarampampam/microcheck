@@ -20,6 +20,7 @@
 #include <limits.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -119,9 +120,12 @@
 #define ERR_HTTPS_NOT_SUPPORTED                                                \
   "Error: HTTPS not supported in this build, use httpscheck binary instead\n"
 #define ERR_SOCKET_ERROR "Error: socket error\n"
+#define ERR_TIMEOUT "Error: operation timed out\n"
 #define ERR_DOMAIN_RESOLVING_ERROR "Error: failed to resolve domain name\n"
 #define ERR_BAD_REQUEST_ERROR "Error: failed to build HTTP request\n"
 #define ERR_BAD_RESPONSE_ERROR "Error: invalid HTTP response from server\n"
+#define ERR_REQUEST_UNSUCCESS                                                  \
+  "Error: server responded with non-success status\n"
 #define ERR_UNKNOWN_ERROR "Error: unknown error occurred\n"
 
 /* Global flag for signal handling - volatile ensures visibility across signal
@@ -352,7 +356,7 @@ static inline bool is_success_status(const long status) {
 /**
  * Check if HTTP status code is valid.
  */
-static inline bool is_valid_status(const long status) {
+static inline bool is_valid_status(const long status) { // TODO: del
   return status >= HTTP_STATUS_MIN && status <= HTTP_STATUS_MAX;
 }
 
@@ -364,12 +368,14 @@ typedef enum {
   REQUEST_SUCCESS,          // 2xx status code received
   REQUEST_ALLOCATION_ERROR, // memory allocation error
   REQUEST_SOCKET_ERROR,
+  REQUEST_TIMEOUT_ERROR,
   REQUEST_DOMAIN_RESOLVING_ERROR,
   REQUEST_BAD_REQUEST_ERROR,
   REQUEST_BAD_RESPONSE_ERROR,
   REQUEST_INTERRUPTED_ERROR,
   REQUEST_HTTP_ERROR,       // TODO: delete
   REQUEST_CONNECTION_ERROR, // TODO: delete
+  REQUEST_UNSUCCESS,
   REQUEST_UNKNOWN_ERROR,
 } request_result_t;
 
@@ -786,29 +792,44 @@ static request_result_t http_request(const char *method,
     goto cleanup;
   }
 
-
-
-  printf("\n\n==================================\n");
-
-  char ip_str[INET_ADDRSTRLEN];
-  inet_ntop(AF_INET, &addr, ip_str, INET_ADDRSTRLEN);
-  printf("Resolved IP: %s, Port: %u\n", ip_str, url->port);
-
-  printf("\n==================================\n\n");
-
-  int flags = fcntl(sockfd, F_GETFL, 0);
-  fcntl(sockfd, F_SETFL, flags & ~O_NONBLOCK);
+  // set non-blocking mode for connect
+  const int flags = fcntl(sockfd, F_GETFL, 0);
+  fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
 
   // establish connection
   if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) <
       0) {
-    printf("\n\n==================================\n");
-    fprintf(stderr, "Connect failed: %s (errno: %d)\n", strerror(errno), errno);
-    printf("\n==================================\n\n");
+    if (errno != EINPROGRESS) {
+      result = REQUEST_SOCKET_ERROR;
 
-    result = REQUEST_SOCKET_ERROR;
+      goto cleanup;
+    }
 
-    goto cleanup;
+    // wait for connection with timeout
+    struct pollfd pfd = {.fd = sockfd, .events = POLLOUT};
+
+    const int poll_result = poll(&pfd, 1, timeout * 1000); // timeout in ms
+    if (poll_result < 0) {
+      result = (errno == EINTR && interrupted) ? REQUEST_INTERRUPTED_ERROR
+                                               : REQUEST_SOCKET_ERROR;
+      goto cleanup;
+    }
+
+    if (poll_result == 0) {
+      result = REQUEST_TIMEOUT_ERROR;
+
+      goto cleanup;
+    }
+
+    // check for socket errors
+    int so_error;
+    socklen_t len = sizeof(so_error);
+    getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &so_error, &len);
+    if (so_error != 0) {
+      result = REQUEST_SOCKET_ERROR;
+
+      goto cleanup;
+    }
   }
 
   // check for interruption after blocking operation
@@ -827,50 +848,53 @@ static request_result_t http_request(const char *method,
     goto cleanup;
   }
 
-  // send HTTP request
-  const ssize_t sent = send(sockfd, request.buffer, request.length, 0);
-  if (sent < 0) {
-    http_free_build_request_result(&request);
-    result = REQUEST_SOCKET_ERROR;
+  // restore previous socket flags (after non-blocking connect)
+  fcntl(sockfd, F_SETFL, flags);
 
-    goto cleanup;
-  }
+  // send HTTP request with loop
+  size_t total_sent = 0;
+  while (total_sent < request.length) {
+    const ssize_t sent = send(sockfd, request.buffer + total_sent,
+                              request.length - total_sent, 0);
+    if (sent < 0) {
+      if (errno == EINTR && interrupted) {
+        result = REQUEST_INTERRUPTED_ERROR;
+      } else {
+        result = REQUEST_SOCKET_ERROR;
+      }
 
-  // ensure all data was sent
-  if (sent != (ssize_t)request.length) {
-    result = REQUEST_SOCKET_ERROR;
-    http_free_build_request_result(&request);
+      http_free_build_request_result(&request);
 
-    goto cleanup;
+      goto cleanup;
+    }
+
+    total_sent += (size_t)sent;
   }
 
   http_free_build_request_result(&request);
 
-  // check for interruption after blocking operation
-  if (interrupted) {
-    result = REQUEST_INTERRUPTED_ERROR;
+  // read at least status line
+  char resp_buf[32];
+  size_t total_read = 0;
 
-    goto cleanup;
-  }
+  while (total_read < 12) {
+    const ssize_t n =
+        recv(sockfd, resp_buf + total_read, sizeof(resp_buf) - total_read, 0);
 
-  char resp_buf[32]; // 32 bytes is enough for status line
-  const ssize_t resp_buf_read = recv(sockfd, resp_buf, sizeof(resp_buf), 0);
+    if (n < 0) {
+      result = (errno == EINTR && interrupted) ? REQUEST_INTERRUPTED_ERROR
+                                               : REQUEST_SOCKET_ERROR;
 
-  { // the rest of the response is not needed, so drain the data
-    shutdown(sockfd, SHUT_WR); // signal we're done
-
-    // drain any remaining data
-    char trash[1024];
-    while (recv(sockfd, trash, sizeof(trash), 0) > 0) {
-      // do nothing
+      goto cleanup;
     }
-  }
 
-  // ensure we've got enough at least the status line
-  if (resp_buf_read < 12) { // 12 = "HTTP/1.x XXX"
-    result = REQUEST_BAD_RESPONSE_ERROR;
+    if (n == 0) {
+      result = REQUEST_BAD_RESPONSE_ERROR;
 
-    goto cleanup;
+      goto cleanup;
+    }
+
+    total_read += (size_t)n;
   }
 
   // parse status code
@@ -881,9 +905,19 @@ static request_result_t http_request(const char *method,
     goto cleanup;
   }
 
-  if (is_success_status(status_code)) {
-    result = REQUEST_SUCCESS;
+  { // the rest of the response is not needed, so drain the data
+    shutdown(sockfd, SHUT_WR); // signal we're done
+
+    // drain any remaining data
+    char trash[1024];
+    while (recv(sockfd, trash, sizeof(trash), 0) > 0) {
+      if (interrupted) {
+        break;
+      }
+    }
   }
+
+  result = is_success_status(status_code) ? REQUEST_SUCCESS : REQUEST_UNSUCCESS;
 
 cleanup:
   free(host);
@@ -1290,7 +1324,7 @@ int main(const int argc, const char *argv[]) {
       .host_len = host_override
                       ? strlen(host_override)
                       : parsed_url.host_len, // apply host override if provided
-      .port = port_override
+      .port = port_override > 0
                   ? port_override
                   : parsed_url.port, // apply port override if provided
       .path = parsed_url.path,
@@ -1366,6 +1400,9 @@ int main(const int argc, const char *argv[]) {
   case REQUEST_SOCKET_ERROR:
     fputs(ERR_SOCKET_ERROR, stderr);
     break;
+  case REQUEST_TIMEOUT_ERROR:
+    fputs(ERR_TIMEOUT, stderr);
+    break;
   case REQUEST_DOMAIN_RESOLVING_ERROR:
     fputs(ERR_DOMAIN_RESOLVING_ERROR, stderr);
     break;
@@ -1377,6 +1414,9 @@ int main(const int argc, const char *argv[]) {
     break;
   case REQUEST_INTERRUPTED_ERROR:
     fputs(ERR_INTERRUPTED, stderr);
+    break;
+  case REQUEST_UNSUCCESS:
+    fputs(ERR_REQUEST_UNSUCCESS, stderr);
     break;
   default:
     fputs(ERR_UNKNOWN_ERROR, stderr);
