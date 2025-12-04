@@ -112,7 +112,7 @@ Options:
 
 ```shell
 # Explicit HTTP
-httpscheck http://localhost:8080/health
+httpcheck http://localhost:8080/health
 
 # Explicit HTTPS
 httpscheck https://localhost:8080/health
@@ -150,17 +150,14 @@ Options:
       --timeout-env Change env variable name for --timeout
 ```
 
-#### Environment Variable Overrides
-
-Most options can be overridden via environment variables. This is useful in Docker containers, where you may
-want to configure health checks without modifying the command line. For example:
+Examples:
 
 ```shell
-# Use a custom method via environment variable
-CHECK_METHOD=HEAD httpcheck http://127.0.0.1
+# Check TCP port 80 on localhost
+portcheck --port 80
 
-# If the application already uses the APP_PORT variable, you can map it to override the port used by httpcheck
-APP_PORT=8080 httpcheck --port-env=APP_PORT http://127.0.0.1
+# Check UDP port 53 on example.com
+portcheck --udp --port 53 --host example.com
 ```
 
 ### `parallel`
@@ -177,6 +174,16 @@ and returns the failure code, ensuring fast failure detection.
 Options:
   -h, --help  Show this help message
   -j, --jobs  Limit number of parallel jobs (has no effect, kept for backward compatibility
+```
+
+Examples:
+
+```shell
+# Check both HTTP endpoint AND port using parallel
+parallel "httpcheck http://127.0.0.1:8080" "portcheck --port 8080"
+
+# Check multiple HTTP endpoints
+parallel "httpcheck http://127.0.0.1:8080/health" "httpcheck http://127.0.0.1:8080/status"
 ```
 
 #### Argument Parsing
@@ -254,6 +261,19 @@ HEALTHCHECK --interval=5s CMD ["pidcheck", "--file", "/var/run/myapp.pid"]
 
 The PID file should contain a single process ID number. Leading and trailing whitespace is automatically
 stripped. Any non-numeric content will result in an error.
+
+### Environment Variable Overrides
+
+Most options can be overridden via environment variables. This is useful in Docker containers, where you may
+want to configure health checks without modifying the command line. For example:
+
+```shell
+# Use a custom method via environment variable
+CHECK_METHOD=HEAD httpcheck http://127.0.0.1
+
+# If the application already uses the APP_PORT variable, you can map it to override the port used by httpcheck
+APP_PORT=8080 httpcheck --port-env=APP_PORT http://127.0.0.1
+```
 
 ## 🐋 Docker image
 
