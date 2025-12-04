@@ -60,7 +60,8 @@ So, think of this as an alternative to:
 
 * **Statically linked**: Works in minimal containers (e.g., `scratch`, `distroless`)
 * **Pretty fast**: Written in pure `C`, compiled with `musl`
-* **Multi-arch and cross-compiled** (x86_64, ARM, etc.)
+* **Multi-arch and cross-compiled** (x86_64, ARM, etc.), even for macOS you may find precompiled binaries in
+  the releases
 * **Distributed** as single binaries (see the releases page) and Docker image
 * **Minimal size**: Optimized for small Docker images
 * **TLS support**: Uses `mbedTLS` for HTTPS (accepts self-signed certificates and does NOT verify SSL/TLS certificates)
