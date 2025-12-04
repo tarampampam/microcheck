@@ -8,9 +8,9 @@ C_SECURITY_FLAGS = -fstack-protector-strong -D_FORTIFY_SOURCE=2
 C_WARNING_FLAGS  = -Wall -Wextra -Werror -Wpedantic -Wformat=2 -Wformat-security -Wnull-dereference \
 	-Wstack-protector -Wstrict-overflow=3 -Wwrite-strings -Wconversion -Wshadow
 C_STRIP_FLAGS    = -s -fno-asynchronous-unwind-tables -fno-ident -Wl,--build-id=none -Wl,--hash-style=gnu
-C_LDFLAGS        = -Wl,--gc-sections -Wl,--as-needed -Wl,-O1 -Wl,--strip-all
+C_LDFLAGS_EXTRA := -static
+C_LDFLAGS        = $(C_LDFLAGS_EXTRA) -Wl,--gc-sections -Wl,--as-needed -Wl,-O1 -Wl,--strip-all
 CFLAGS           = -std=c99 -D_POSIX_C_SOURCE=200809L
-CFLAGS_EXTRA    := # additional flags can be added here
 CFLAGS          += $(C_SIZE_FLAGS) $(C_SECURITY_FLAGS) $(C_WARNING_FLAGS) $(C_STRIP_FLAGS) $(C_LDFLAGS)
 STRIP_FLAGS      = -s -R .comment -R .gnu.version -R .note -R .note.ABI-tag -R .note.gnu.build-id -R .gnu.hash \
 	-R .eh_frame -R .eh_frame_hdr
