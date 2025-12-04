@@ -114,7 +114,7 @@ typedef struct {
  */
 typedef struct {
   job_t *jobs;
-  int jobs_count;
+  size_t jobs_count;
   volatile sig_atomic_t interrupted;
 } runtime_state_t;
 
@@ -338,7 +338,7 @@ static void safe_kill_group(const pid_t pgid, const int sig) {
  * Kill all running job process groups.
  */
 static void kill_all_jobs(const runtime_state_t *state) {
-  for (int i = 0; i < state->jobs_count; i++) {
+  for (size_t i = 0; i < state->jobs_count; i++) {
     if (state->jobs[i].pgid > 0) {
       safe_kill_group(state->jobs[i].pgid, SIGTERM);
     }
@@ -350,7 +350,7 @@ static void kill_all_jobs(const runtime_state_t *state) {
  * Kills running jobs, waits for them, and frees memory.
  */
 static void cleanup_all(runtime_state_t *state, command_t *commands,
-                        const int num_commands) {
+                        const size_t num_commands) {
   // kill all running jobs
   if (state && state->jobs && state->jobs_count > 0) {
     kill_all_jobs(state);
@@ -373,10 +373,10 @@ static void cleanup_all(runtime_state_t *state, command_t *commands,
       }
 
       // remove from running jobs by finding and shifting
-      for (int i = 0; i < state->jobs_count; i++) {
+      for (size_t i = 0; i < state->jobs_count; i++) {
         if (state->jobs[i].pid == pid) {
-          for (int j = i; j < state->jobs_count - 1; j++) {
-            state->jobs[j] = state->jobs[j + 1];
+          for (size_t j = i + 1; j < state->jobs_count; j++) {
+            state->jobs[j - 1] = state->jobs[j];
           }
           state->jobs_count--;
           break;
@@ -387,7 +387,7 @@ static void cleanup_all(runtime_state_t *state, command_t *commands,
 
   // free command structures
   if (commands) {
-    for (int i = 0; i < num_commands; i++) {
+    for (size_t i = 0; i < num_commands; i++) {
       free_command(&commands[i]);
     }
 
@@ -422,7 +422,7 @@ int main(const int argc, const char *argv[]) {
   cli_app_state_t *app = NULL;
   cli_args_parsing_result_t *parsing_result = NULL;
   command_t *commands = NULL;
-  int num_commands = 0;
+  size_t num_commands = 0;
   runtime_state_t state = {
       .jobs = NULL,
       .jobs_count = 0,
@@ -562,7 +562,7 @@ int main(const int argc, const char *argv[]) {
   }
 
   // allocate jobs array
-  state.jobs = calloc((size_t)num_commands, sizeof(job_t));
+  state.jobs = calloc(num_commands, sizeof(job_t));
   if (!state.jobs) {
     fputs(ERR_ALLOCATION_FAILED, stderr);
 
@@ -570,7 +570,7 @@ int main(const int argc, const char *argv[]) {
   }
 
   // start all commands
-  for (int i = 0; i < num_commands; i++) {
+  for (size_t i = 0; i < num_commands; i++) {
     const pid_t pid = execute_command(&commands[i]);
     if (pid < 0) {
       // failed to start command - kill all already started and exit
@@ -615,11 +615,11 @@ int main(const int argc, const char *argv[]) {
 
     // find and remove job from tracking
     bool job_found = false;
-    for (int i = 0; i < state.jobs_count; i++) {
+    for (size_t i = 0; i < state.jobs_count; i++) {
       if (state.jobs[i].pid == pid) {
         // shift remaining jobs
-        for (int j = i; j < state.jobs_count - 1; j++) {
-          state.jobs[j] = state.jobs[j + 1];
+        for (size_t j = i + 1; j < state.jobs_count; j++) {
+          state.jobs[j - 1] = state.jobs[j];
         }
         state.jobs_count--;
         job_found = true;
