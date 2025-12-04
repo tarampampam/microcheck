@@ -10,12 +10,12 @@
 
 #include "../lib/cli/cli.h"
 #include "version.h"
-
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -85,9 +85,6 @@ static const cli_app_meta_t APP_META = {
         "  # Custom timeout\n"
         "  " APP_NAME " --" FLAG_HOST_LONG " db.example.com --" FLAG_PORT_LONG
         " 5432 --" FLAG_TIMEOUT_LONG " 10\n"};
-
-// TODO: seema like even simple `./build/bin/portcheck --tcp --port 443
-// example.com` fails now
 
 static const cli_flag_meta_t TCP_FLAG_META = {
     .long_name = FLAG_TCP_LONG,
@@ -334,21 +331,13 @@ static bool wait_for_connect(const int sockfd, const int timeout_sec) {
     return false;
   }
 
-  fd_set write_fds;
-  fd_set error_fds;
-  struct timeval timeout;
+  struct pollfd pfd = {
+    .fd = sockfd,
+    .events = POLLOUT
+  };
 
-  FD_ZERO(&write_fds);
-  FD_ZERO(&error_fds);
-  FD_SET((unsigned int)sockfd, &write_fds);
-  FD_SET((unsigned int)sockfd, &error_fds);
+  const int ret = poll(&pfd, 1, timeout_sec * 1000);
 
-  timeout.tv_sec = timeout_sec;
-  timeout.tv_usec = 0;
-
-  const int ret = select(sockfd + 1, NULL, &write_fds, &error_fds, &timeout);
-
-  // check for interruption immediately after select
   if (interrupted) {
     return false;
   }
@@ -357,36 +346,14 @@ static bool wait_for_connect(const int sockfd, const int timeout_sec) {
     return false;
   }
 
-  // check if socket has error
-  if (FD_ISSET((unsigned int)sockfd, &error_fds)) {
-    int error = 0;
-    socklen_t len = sizeof(error);
-    if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &error, &len) < 0) {
-      return false;
-    }
-
-    if (error != 0) {
-      return false;
-    }
+  // check connection error
+  int error = 0;
+  socklen_t len = sizeof(error);
+  if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &error, &len) < 0) {
+    return false;
   }
 
-  // check if socket is writable (connected)
-  if (FD_ISSET((unsigned int)sockfd, &write_fds)) {
-    // verify connection succeeded by checking SO_ERROR
-    int error = 0;
-    socklen_t len = sizeof(error);
-    if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &error, &len) < 0) {
-      return false;
-    }
-
-    if (error != 0) {
-      return false;
-    }
-
-    return true;
-  }
-
-  return false;
+  return error == 0;
 }
 
 /**
@@ -895,7 +862,19 @@ int main(const int argc, const char *argv[]) {
   const bool success = use_tcp ? check_tcp_port(addr, port, timeout)
                                : check_udp_port(addr, port, timeout);
 
-  exit_code = success ? EXIT_SUCCESS_CODE : EXIT_FAILURE_CODE;
+  if (!success) {
+    fputs("Error: ", stderr);
+    fputs(use_tcp ? "TCP" : "UDP", stderr);
+    fputs("port ", stderr);
+    fputs(port_value, stderr);
+    fputs(" on host '", stderr);
+    fputs(host_value, stderr);
+    fputs("' is not accessible\n", stderr);
+
+    exit_code = EXIT_FAILURE_CODE;
+  } else {
+    exit_code = EXIT_SUCCESS_CODE;
+  }
 
 cleanup:
   free_cli_args_parsing_result(parsing_result);

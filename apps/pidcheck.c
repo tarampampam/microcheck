@@ -503,8 +503,21 @@ int main(const int argc, const char *argv[]) {
     }
   }
 
-  exit_code = check_process_exists(pid_to_check) ? EXIT_SUCCESS_CODE
-                                                 : EXIT_FAILURE_CODE;
+  if (!check_process_exists(pid_to_check)) {
+    fputs("Error: Process with PID ", stdout);
+    if (pid_file) {
+      fputs("from file '", stdout);
+      fputs(pid_file, stdout);
+      fputs("' ", stdout);
+    } else {
+      fputs(proc_pid, stdout);
+    }
+    fputs(" does not exist\n", stdout);
+
+    exit_code = EXIT_FAILURE_CODE;
+  } else {
+    exit_code = EXIT_SUCCESS_CODE;
+  }
 
 cleanup:
   free_cli_args_parsing_result(parsing_result);
