@@ -32,6 +32,27 @@ jobs:
       - run: make
       - run: make test
 
+  build-macos:
+    name: Build for macOS (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: x86_64, runner: macos-13} # Intel runner
+          - {arch: arm64, runner: macos-14} # Apple Silicon runner
+    steps:
+      - uses: actions/checkout@v6
+      - run: brew install cmake
+      - run: make CC=clang CFLAGS_EXTRA="-arch ${{ matrix.arch }}"
+      - run: ls -lh ./build/bin/
+      - run: |
+          ./build/bin/httpcheck --help
+          ./build/bin/httpscheck --help
+          ./build/bin/portcheck --help
+          ./build/bin/parallel --help
+          ./build/bin/pidcheck --help
+
   build-image:
     name: Build docker image (${{ matrix.platform }})
     runs-on: ubuntu-latest
