@@ -132,6 +132,11 @@ determine if the port is open or closed.
 > which may not receive a response from many services. Use UDP checks only when you are certain the target
 > will respond appropriately.
 
+> [!NOTE]
+> You need to specify the target host and port explicitly via flags or environment variables. Don't try to pass
+> them as positional arguments like `portcheck --port 80 example.com`, as this tool does not accept them that way.
+> Use `--host` and `--port` options instead - `portcheck --port 80 --host example.com`.
+
 ```
 Options:
   -h, --help        Show this help message
