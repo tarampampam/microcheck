@@ -80,8 +80,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {arch: x86_64, runner: macos-13} # Intel runner
-          - {arch: arm64, runner: macos-14} # Apple Silicon runner
+          - {arch: x86_64, runner: macos-15-intel} # Intel runner
+          - {arch: arm64, runner: macos-15} # Apple Silicon runner
     steps:
       - uses: actions/checkout@v6
       - run: make CC=clang C_LDFLAGS_EXTRA="-arch ${{ matrix.arch }}"
