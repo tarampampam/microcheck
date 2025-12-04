@@ -44,11 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - run: brew install cmake
-      - run: |
-          make CC=clang \
-            C_STRIP_FLAGS="-fno-asynchronous-unwind-tables -fno-ident" \
-            C_LDFLAGS="-Wl,-dead_strip -arch ${{ matrix.arch }}" \
-            C_LDFLAGS_EXTRA=""
+      - run: make CC=clang CFLAGS="$(CFLAGS) -arch ${{ matrix.arch }}" LDFLAGS="$(LDFLAGS) -arch ${{ matrix.arch }}"
       - run: ls -lh ./build/bin/
       - run: |
           ./build/bin/httpcheck --help
