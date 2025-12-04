@@ -44,7 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - run: brew install cmake
-      - run: make CC=clang CFLAGS_EXTRA="-arch ${{ matrix.arch }}"
+      - run: make CC=clang C_LDFLAGS_EXTRA="-arch ${{ matrix.arch }}" # set target arch and unset `-static`
       - run: ls -lh ./build/bin/
       - run: |
           ./build/bin/httpcheck --help
