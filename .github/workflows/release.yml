@@ -16,7 +16,8 @@ jobs:
       tags: ${{ steps.tags.outputs.list }}
     steps:
       - uses: actions/checkout@v6
-      - {uses: gacts/github-slug@v1, id: slug}
+      - uses: gacts/github-slug@v1
+        id: slug
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
@@ -95,7 +96,9 @@ jobs:
           cd ./dist
           tar -czf ../release.tar.gz *
           zip -r ../release.zip .
-      - {uses: gacts/github-slug@v1, id: filename, with: {to-slug: 'macos-${{ matrix.arch }}'}}
+      - uses: gacts/github-slug@v1
+        id: filename
+        with: {to-slug: 'macos-${{ matrix.arch }}'}
       - uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
@@ -125,7 +128,8 @@ jobs:
           - linux/s390x
     steps:
       - uses: actions/checkout@v6
-      - {uses: gacts/github-slug@v1, id: slug}
+      - uses: gacts/github-slug@v1
+        id: slug
       - uses: docker/login-action@v4
         with: {registry: ghcr.io, username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}'}
       - run: |
@@ -140,7 +144,9 @@ jobs:
           cd ./dist
           tar -czf ../release.tar.gz *
           zip -r ../release.zip .
-      - {uses: gacts/github-slug@v1, id: filename, with: {to-slug: '${{ matrix.platform }}'}}
+      - uses: gacts/github-slug@v1
+        id: filename
+        with: {to-slug: '${{ matrix.platform }}'}
       - uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
