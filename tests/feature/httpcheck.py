@@ -639,6 +639,13 @@ def get_test_cases() -> List[TestCase]:
         ),
 
         TestCase(
+            name="Custom connect-timeout environment variable name",
+            give_args=["--connect-timeout-env", "CONN_TIMEOUT", "{PROTOCOL}://127.0.0.1:{PORT}/"],
+            give_env={"CONN_TIMEOUT": "0.5"},
+            want_exit_code=0,
+        ),
+
+        TestCase(
             name="Custom basic-auth environment variable name",
             give_args=["--basic-auth-env", "AUTH_CREDS", "{PROTOCOL}://127.0.0.1:{PORT}/"],
             give_env={"AUTH_CREDS": "user:pass"},
@@ -778,6 +785,33 @@ def get_test_cases() -> List[TestCase]:
             server_delay=0.5,
         ),
 
+        # Connect timeout tests
+        TestCase(
+            name="Connect timeout via flag (float seconds)",
+            give_args=["--connect-timeout", "0.5", "{PROTOCOL}://127.0.0.1:{PORT}/"],
+            want_exit_code=0,
+        ),
+
+        TestCase(
+            name="Connect timeout via flag (integer seconds)",
+            give_args=["--connect-timeout", "1", "{PROTOCOL}://127.0.0.1:{PORT}/"],
+            want_exit_code=0,
+        ),
+
+        TestCase(
+            name="Connect timeout via environment variable",
+            give_args=["{PROTOCOL}://127.0.0.1:{PORT}/"],
+            give_env={"CHECK_CONNECT_TIMEOUT": "0.5"},
+            want_exit_code=0,
+        ),
+
+        TestCase(
+            name="Connect timeout flag overrides environment variable",
+            give_args=["--connect-timeout", "0.5", "{PROTOCOL}://127.0.0.1:{PORT}/"],
+            give_env={"CHECK_CONNECT_TIMEOUT": "abc"},
+            want_exit_code=0,
+        ),
+
         # Error handling
         TestCase(
             name="No URL provided",
@@ -828,6 +862,41 @@ def get_test_cases() -> List[TestCase]:
             give_args=["--timeout", "abc", "{PROTOCOL}://127.0.0.1:{PORT}/"],
             want_exit_code=1,
             want_stderr_contains="invalid timeout value",
+        ),
+
+        TestCase(
+            name="Invalid connect timeout value (zero)",
+            give_args=["--connect-timeout", "0", "{PROTOCOL}://127.0.0.1:{PORT}/"],
+            want_exit_code=1,
+            want_stderr_contains="invalid connect timeout value",
+        ),
+
+        TestCase(
+            name="Invalid connect timeout value (zero float)",
+            give_args=["--connect-timeout", "0.0", "{PROTOCOL}://127.0.0.1:{PORT}/"],
+            want_exit_code=1,
+            want_stderr_contains="invalid connect timeout value",
+        ),
+
+        TestCase(
+            name="Invalid connect timeout value (non-numeric)",
+            give_args=["--connect-timeout", "abc", "{PROTOCOL}://127.0.0.1:{PORT}/"],
+            want_exit_code=1,
+            want_stderr_contains="invalid connect timeout value",
+        ),
+
+        TestCase(
+            name="Invalid connect timeout value (negative)",
+            give_args=["--connect-timeout", "-1", "{PROTOCOL}://127.0.0.1:{PORT}/"],
+            want_exit_code=1,
+            want_stderr_contains="invalid connect timeout value",
+        ),
+
+        TestCase(
+            name="Invalid connect timeout value (trailing garbage)",
+            give_args=["--connect-timeout", "0.5abc", "{PROTOCOL}://127.0.0.1:{PORT}/"],
+            want_exit_code=1,
+            want_stderr_contains="invalid connect timeout value",
         ),
 
         TestCase(
@@ -942,6 +1011,7 @@ def get_test_cases() -> List[TestCase]:
                 "--method-env", "M",
                 "--user-agent-env", "UA",
                 "--timeout-env", "TO",
+                "--connect-timeout-env", "CT",
                 "--host-env", "H",
                 "--port-env", "P",
                 "--basic-auth-env", "BA",
@@ -952,6 +1022,7 @@ def get_test_cases() -> List[TestCase]:
                 "M": "POST",
                 "UA": "CustomAgent/1.0",
                 "TO": "10",
+                "CT": "0.5",
                 "H": "127.0.0.1",
                 "P": "{PORT}",
                 "BA": "testuser:testpass",
@@ -1560,6 +1631,23 @@ def get_test_cases() -> List[TestCase]:
                 "User-Agent": "EnvClient/1.0",
                 "Host": "127.0.0.1:{PORT}",
             },
+            fallback_only=True,
+        ),
+
+        TestCase(
+            name="Fallback: Explicit connect-timeout preserved during fallback",
+            give_args=["--connect-timeout", "0.5", "127.0.0.1:{PORT}/health"],
+            want_exit_code=0,
+            want_url_path="/health",
+            fallback_only=True,
+        ),
+
+        TestCase(
+            name="Fallback: Connect-timeout via environment preserved during fallback",
+            give_args=["127.0.0.1:{PORT}/health"],
+            give_env={"CHECK_CONNECT_TIMEOUT": "0.5"},
+            want_exit_code=0,
+            want_url_path="/health",
             fallback_only=True,
         ),
 
