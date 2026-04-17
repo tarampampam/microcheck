@@ -243,7 +243,8 @@ static const cli_flag_meta_t CONNECT_TIMEOUT_FLAG_META = {
 #ifndef WITH_TLS
     .description = "TCP connect timeout in seconds (float, e.g. 0.5)",
 #else
-    .description = "TCP connect and TLS handshake timeout in seconds (float, e.g. 0.5)",
+    .description =
+        "TCP connect and TLS handshake timeout in seconds (float, e.g. 0.5)",
 #endif
     .env_variable = "CHECK_CONNECT_TIMEOUT",
     .type = FLAG_TYPE_STRING,
@@ -1173,8 +1174,8 @@ int main(const int argc, const char *argv[]) {
 
   if (!help_flag || !method_flag || !method_env_flag || !user_agent_flag ||
       !user_agent_env_flag || !timeout_flag || !timeout_env_flag ||
-      !connect_timeout_flag || !connect_timeout_env_flag ||
-      !header_flag || !basic_auth_flag || !basic_auth_env_flag || !host_flag ||
+      !connect_timeout_flag || !connect_timeout_env_flag || !header_flag ||
+      !basic_auth_flag || !basic_auth_env_flag || !host_flag ||
       !host_env_flag || !port_flag || !port_env_flag) {
     fputs(ERR_ALLOCATION_FAILED, stderr);
 
@@ -1209,14 +1210,13 @@ int main(const int argc, const char *argv[]) {
   const struct {
     const cli_flag_state_t *env_flag;
     cli_flag_state_t *target_flag;
-  } flag_pairs[] = {
-      {method_env_flag, method_flag},
-      {user_agent_env_flag, user_agent_flag},
-      {timeout_env_flag, timeout_flag},
-      {connect_timeout_env_flag, connect_timeout_flag},
-      {basic_auth_env_flag, basic_auth_flag},
-      {host_env_flag, host_flag},
-      {port_env_flag, port_flag}};
+  } flag_pairs[] = {{method_env_flag, method_flag},
+                    {user_agent_env_flag, user_agent_flag},
+                    {timeout_env_flag, timeout_flag},
+                    {connect_timeout_env_flag, connect_timeout_flag},
+                    {basic_auth_env_flag, basic_auth_flag},
+                    {host_env_flag, host_flag},
+                    {port_env_flag, port_flag}};
 
   for (size_t i = 0; i < sizeof(flag_pairs) / sizeof(flag_pairs[0]); i++) {
     if (override_flag_env_variable(flag_pairs[i].env_flag,
