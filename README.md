@@ -92,20 +92,22 @@ code (but with different build flags).
 
 ```
 Options:
-  -h, --help           Show this help message
-  -m, --method         HTTP method to use (default: "GET") [$CHECK_METHOD]
-      --method-env     Change env variable name for --method
-  -u, --user-agent     User-Agent header value (default: "healthcheck/0.0.0 (httpscheck)") [$CHECK_USER_AGENT]
-      --user-agent-env Change env variable name for --user-agent
-  -t, --timeout        Request timeout in seconds (default: "5") [$CHECK_TIMEOUT]
-      --timeout-env    Change env variable name for --timeout
-  -H, --header         Add custom HTTP header (can be used multiple times)
-      --basic-auth     Basic auth credentials (username:password) [$CHECK_BASIC_AUTH]
-      --basic-auth-env Change env variable name for --basic-auth
-      --host           Override hostname from URL [$CHECK_HOST]
-      --host-env       Change env variable name for --host
-  -p, --port           Override port from URL [$CHECK_PORT]
-      --port-env       Change env variable name for --port
+  -h, --help                Show this help message
+  -m, --method              HTTP method to use (default: "GET") [$CHECK_METHOD]
+      --method-env          Change env variable name for --method
+  -u, --user-agent          User-Agent header value (default: "healthcheck/0.0.0 (httpcheck)") [$CHECK_USER_AGENT]
+      --user-agent-env      Change env variable name for --user-agent
+  -t, --timeout             Request timeout in seconds (default: "5") [$CHECK_TIMEOUT]
+      --timeout-env         Change env variable name for --timeout
+      --connect-timeout     TCP connect timeout in seconds (float, e.g. 0.5) (default: "0.25") [$CHECK_CONNECT_TIMEOUT]
+      --connect-timeout-env Change env variable name for --connect-timeout
+  -H, --header              Add custom HTTP header (can be used multiple times)
+      --basic-auth          Basic auth credentials (username:password) [$CHECK_BASIC_AUTH]
+      --basic-auth-env      Change env variable name for --basic-auth
+      --host                Override hostname from URL [$CHECK_HOST]
+      --host-env            Change env variable name for --host
+  -p, --port                Override port from URL [$CHECK_PORT]
+      --port-env            Change env variable name for --port
 ```
 
 **URL Format Examples:**
@@ -691,6 +693,8 @@ To build the tools from sources, ensure you have the following dependencies inst
 * `patch`
 * Standard build tools (`make`, `tar`)
 * Optionally - `clang-format`
+
+> On Debian: `sudo apt install musl-tools cmake wget patch clang-format make tar`
 
 After cloning the repository, build the tools using the `Makefile` - execute `make`.
 

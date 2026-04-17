@@ -61,6 +61,9 @@
 #define MIN_TIMEOUT 1
 #define MAX_TIMEOUT 3600
 
+/* Connect timeout limits */
+#define MIN_CONNECT_TIMEOUT_MS 1 // 0.001 seconds minimum
+
 /* Port range validation */
 #define MIN_PORT 1
 #define MAX_PORT 65535
@@ -84,6 +87,8 @@
 #define FLAG_PORT_SHORT "p"
 #define FLAG_PORT_LONG "port"
 #define FLAG_PORT_ENV_LONG "port-env"
+#define FLAG_CONNECT_TIMEOUT_LONG "connect-timeout"
+#define FLAG_CONNECT_TIMEOUT_ENV_LONG "connect-timeout-env"
 
 #define ERR_FAILED_TO_SETUP_SIG_HANDLER "Error: failed to setup signal handler"
 #define ERR_ALLOCATION_FAILED "Error: memory allocation failed\n"
@@ -92,6 +97,7 @@
 #define ERR_TOO_MANY_URLS "Error: too many URLs provided (only one allowed)\n"
 #define ERR_INTERRUPTED "Error: operation interrupted by signal\n"
 #define ERR_INVALID_TIMEOUT "Error: invalid timeout value\n"
+#define ERR_INVALID_CONNECT_TIMEOUT "Error: invalid connect timeout value\n"
 #define ERR_INVALID_PORT "Error: port must be between 1 and 65535\n"
 #define ERR_INVALID_HEADER_FORMAT                                              \
   "Error: invalid header format (expected 'Name: Value')\n"
@@ -229,6 +235,24 @@ static const cli_flag_meta_t TIMEOUT_FLAG_META = {
 static const cli_flag_meta_t TIMEOUT_ENV_FLAG_META = {
     .long_name = FLAG_TIMEOUT_ENV_LONG,
     .description = "Change env variable name for --" FLAG_TIMEOUT_LONG,
+    .type = FLAG_TYPE_STRING,
+};
+
+static const cli_flag_meta_t CONNECT_TIMEOUT_FLAG_META = {
+    .long_name = FLAG_CONNECT_TIMEOUT_LONG,
+#ifndef WITH_TLS
+    .description = "TCP connect timeout in seconds (float, e.g. 0.5)",
+#else
+    .description = "TCP connect and TLS handshake timeout in seconds (float, e.g. 0.5)",
+#endif
+    .env_variable = "CHECK_CONNECT_TIMEOUT",
+    .type = FLAG_TYPE_STRING,
+    .default_value.string_value = "0.25",
+};
+
+static const cli_flag_meta_t CONNECT_TIMEOUT_ENV_FLAG_META = {
+    .long_name = FLAG_CONNECT_TIMEOUT_ENV_LONG,
+    .description = "Change env variable name for --" FLAG_CONNECT_TIMEOUT_LONG,
     .type = FLAG_TYPE_STRING,
 };
 
@@ -428,7 +452,8 @@ static bool resolve_host(const char *host, struct in_addr *addr) {
 static request_result_t https_request(const char *method,
                                       const http_url_parsed_t *url,
                                       const http_headers_t *headers,
-                                      const int timeout) {
+                                      const int timeout,
+                                      const int connect_timeout_ms) {
   char *host = malloc(url->host_len + 1);
   if (!host) {
     return REQUEST_ALLOCATION_ERROR;
@@ -479,6 +504,12 @@ static request_result_t https_request(const char *method,
 
   // set non-blocking mode
   const int flags = fcntl(server_fd.fd, F_GETFL, 0);
+  if (flags < 0) {
+    result = REQUEST_SOCKET_ERROR;
+
+    goto cleanup;
+  }
+
   fcntl(server_fd.fd, F_SETFL, flags | O_NONBLOCK);
 
   // prepare address
@@ -499,7 +530,7 @@ static request_result_t https_request(const char *method,
 
     // wait for connection with timeout
     struct pollfd pfd = {.fd = server_fd.fd, .events = POLLOUT};
-    const int poll_result = poll(&pfd, 1, timeout * 1000);
+    const int poll_result = poll(&pfd, 1, connect_timeout_ms);
 
     if (poll_result < 0) {
       result = (errno == EINTR && interrupted) ? REQUEST_INTERRUPTED_ERROR
@@ -515,7 +546,7 @@ static request_result_t https_request(const char *method,
     }
 
     // check for socket errors
-    int so_error;
+    int so_error = 0;
     socklen_t len = sizeof(so_error);
     getsockopt(server_fd.fd, SOL_SOCKET, SO_ERROR, &so_error, &len);
     if (so_error != 0) {
@@ -531,14 +562,18 @@ static request_result_t https_request(const char *method,
     goto cleanup;
   }
 
-  // restore blocking mode and set timeouts
+  // restore blocking mode and set connect timeout for TLS handshake phase
   fcntl(server_fd.fd, F_SETFL, flags);
 
   struct timeval tv;
-  tv.tv_sec = timeout;
-  tv.tv_usec = 0;
-  setsockopt(server_fd.fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-  setsockopt(server_fd.fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+  tv.tv_sec = connect_timeout_ms / 1000;
+  tv.tv_usec = (connect_timeout_ms % 1000) * 1000;
+  if (setsockopt(server_fd.fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0 ||
+      setsockopt(server_fd.fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) < 0) {
+    result = REQUEST_SOCKET_ERROR;
+
+    goto cleanup;
+  }
 
   // setup SSL/TLS configuration
   ret = mbedtls_ssl_config_defaults(&conf, MBEDTLS_SSL_IS_CLIENT,
@@ -570,7 +605,7 @@ static request_result_t https_request(const char *method,
   mbedtls_ssl_set_bio(&ssl, &server_fd, mbedtls_net_send, mbedtls_net_recv,
                       NULL);
 
-  // perform SSL/TLS handshake
+  // perform SSL/TLS handshake (governed by connect_timeout_ms via SO_RCVTIMEO)
   while ((ret = mbedtls_ssl_handshake(&ssl)) != 0) {
     if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
       result = (interrupted) ? REQUEST_INTERRUPTED_ERROR : REQUEST_TLS_ERROR;
@@ -583,6 +618,16 @@ static request_result_t https_request(const char *method,
 
       goto cleanup;
     }
+  }
+
+  // handshake done: switch to full timeout for request/response exchange
+  tv.tv_sec = timeout;
+  tv.tv_usec = 0;
+  if (setsockopt(server_fd.fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0 ||
+      setsockopt(server_fd.fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) < 0) {
+    result = REQUEST_SOCKET_ERROR;
+
+    goto cleanup;
   }
 
   // build HTTP request
@@ -713,7 +758,8 @@ cleanup:
 static request_result_t http_request(const char *method,
                                      const http_url_parsed_t *url,
                                      const http_headers_t *headers,
-                                     const int timeout) {
+                                     const int timeout,
+                                     const int connect_timeout_ms) {
   char *host = malloc(url->host_len + 1); // +1 for null terminator
   if (!host) {
     return REQUEST_ALLOCATION_ERROR;
@@ -764,6 +810,12 @@ static request_result_t http_request(const char *method,
 
   // set non-blocking mode for connect
   const int flags = fcntl(sockfd, F_GETFL, 0);
+  if (flags < 0) {
+    result = REQUEST_SOCKET_ERROR;
+
+    goto cleanup;
+  }
+
   fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
 
   // establish connection
@@ -778,7 +830,7 @@ static request_result_t http_request(const char *method,
     // wait for connection with timeout
     struct pollfd pfd = {.fd = sockfd, .events = POLLOUT};
 
-    const int poll_result = poll(&pfd, 1, timeout * 1000); // timeout in ms
+    const int poll_result = poll(&pfd, 1, connect_timeout_ms);
     if (poll_result < 0) {
       result = (errno == EINTR && interrupted) ? REQUEST_INTERRUPTED_ERROR
                                                : REQUEST_SOCKET_ERROR;
@@ -792,7 +844,7 @@ static request_result_t http_request(const char *method,
     }
 
     // check for socket errors
-    int so_error;
+    int so_error = 0;
     socklen_t len = sizeof(so_error);
     getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &so_error, &len);
     if (so_error != 0) {
@@ -848,8 +900,8 @@ static request_result_t http_request(const char *method,
   size_t total_read = 0;
 
   while (total_read < 12) {
-    const ssize_t n =
-        recv(sockfd, resp_buf + total_read, sizeof(resp_buf) - total_read, 0);
+    const ssize_t n = recv(sockfd, resp_buf + total_read,
+                           sizeof(resp_buf) - 1 - total_read, 0);
 
     if (n < 0) {
       result = (errno == EINTR && interrupted) ? REQUEST_INTERRUPTED_ERROR
@@ -866,6 +918,8 @@ static request_result_t http_request(const char *method,
 
     total_read += (size_t)n;
   }
+
+  resp_buf[total_read] = '\0'; // ensure null-terminated before parsing
 
   // parse status code
   const int status_code = http_get_response_status_code(resp_buf);
@@ -973,6 +1027,73 @@ static int parse_timeout(const char *str) {
 }
 
 /**
+ * Parse a connect timeout value from string with validation.
+ * Accepts decimal values like "0.1", "1", "1.5" (seconds).
+ * Returns parsed value in milliseconds on success, -1 on error.
+ */
+static int parse_connect_timeout(const char *str) {
+  if (str == NULL || *str == '\0') {
+    return -1;
+  }
+
+  // parse integer part (seconds)
+  unsigned long int_part = 0;
+  const char *p = str;
+
+  while (*p >= '0' && *p <= '9') {
+    const unsigned long digit = (unsigned long)(*p - '0');
+    // check before multiply: 2147482 * 1000 + 999 <= INT_MAX
+    if (int_part > (2147482UL - digit) / 10UL) {
+      return -1;
+    }
+    int_part = int_part * 10UL + digit;
+    p++;
+  }
+
+  // require at least one digit before optional decimal point
+  if (p == str) {
+    return -1;
+  }
+
+  // parse optional fractional part
+  int frac_ms = 0;
+
+  if (*p == '.') {
+    p++;
+    unsigned int frac = 0;
+    unsigned int divisor = 1;
+    int frac_digits = 0;
+
+    while (*p >= '0' && *p <= '9') {
+      if (frac_digits < 4) { // precision up to 0.0001s = 0.1ms
+        frac = frac * 10U + (unsigned int)(*p - '0');
+        divisor *= 10U;
+        frac_digits++;
+      }
+
+      p++;
+    }
+
+    if (frac_digits > 0) {
+      frac_ms = (int)((frac * 1000U) / divisor);
+    }
+  }
+
+  // must have consumed the entire string
+  if (*p != '\0') {
+    return -1;
+  }
+
+  const int total_ms = (int)(int_part * 1000UL + (unsigned long)frac_ms);
+
+  if (total_ms < MIN_CONNECT_TIMEOUT_MS) {
+    return -1;
+  }
+
+  return total_ms;
+}
+
+/**
  * Override target flag's env variable name if specified in env_flag.
  */
 static bool override_flag_env_variable(const cli_flag_state_t *env_flag,
@@ -1033,6 +1154,10 @@ int main(const int argc, const char *argv[]) {
   cli_flag_state_t *timeout_flag = cli_app_add_flag(app, &TIMEOUT_FLAG_META);
   const cli_flag_state_t *timeout_env_flag =
       cli_app_add_flag(app, &TIMEOUT_ENV_FLAG_META);
+  cli_flag_state_t *connect_timeout_flag =
+      cli_app_add_flag(app, &CONNECT_TIMEOUT_FLAG_META);
+  const cli_flag_state_t *connect_timeout_env_flag =
+      cli_app_add_flag(app, &CONNECT_TIMEOUT_ENV_FLAG_META);
   const cli_flag_state_t *header_flag =
       cli_app_add_flag(app, &HEADER_FLAG_META);
   cli_flag_state_t *basic_auth_flag =
@@ -1048,6 +1173,7 @@ int main(const int argc, const char *argv[]) {
 
   if (!help_flag || !method_flag || !method_env_flag || !user_agent_flag ||
       !user_agent_env_flag || !timeout_flag || !timeout_env_flag ||
+      !connect_timeout_flag || !connect_timeout_env_flag ||
       !header_flag || !basic_auth_flag || !basic_auth_env_flag || !host_flag ||
       !host_env_flag || !port_flag || !port_env_flag) {
     fputs(ERR_ALLOCATION_FAILED, stderr);
@@ -1084,9 +1210,13 @@ int main(const int argc, const char *argv[]) {
     const cli_flag_state_t *env_flag;
     cli_flag_state_t *target_flag;
   } flag_pairs[] = {
-      {method_env_flag, method_flag},   {user_agent_env_flag, user_agent_flag},
-      {timeout_env_flag, timeout_flag}, {basic_auth_env_flag, basic_auth_flag},
-      {host_env_flag, host_flag},       {port_env_flag, port_flag}};
+      {method_env_flag, method_flag},
+      {user_agent_env_flag, user_agent_flag},
+      {timeout_env_flag, timeout_flag},
+      {connect_timeout_env_flag, connect_timeout_flag},
+      {basic_auth_env_flag, basic_auth_flag},
+      {host_env_flag, host_flag},
+      {port_env_flag, port_flag}};
 
   for (size_t i = 0; i < sizeof(flag_pairs) / sizeof(flag_pairs[0]); i++) {
     if (override_flag_env_variable(flag_pairs[i].env_flag,
@@ -1156,6 +1286,15 @@ int main(const int argc, const char *argv[]) {
   int timeout_sec = parse_timeout(timeout_flag->value.string_value);
   if (timeout_sec <= 0) {
     fputs(ERR_INVALID_TIMEOUT, stderr);
+
+    goto cleanup;
+  }
+
+  // parse and validate connect timeout
+  int connect_timeout_ms =
+      parse_connect_timeout(connect_timeout_flag->value.string_value);
+  if (connect_timeout_ms <= 0) {
+    fputs(ERR_INVALID_CONNECT_TIMEOUT, stderr);
 
     goto cleanup;
   }
@@ -1317,11 +1456,11 @@ int main(const int argc, const char *argv[]) {
   if (url.proto == PROTO_HTTPS) {
     // explicit HTTPS
     result = https_request(method_flag->value.string_value, &url, headers,
-                           timeout_sec);
+                           timeout_sec, connect_timeout_ms);
   } else if (url.proto == PROTO_HTTP) {
     // explicit HTTP
     result = http_request(method_flag->value.string_value, &url, headers,
-                          timeout_sec);
+                          timeout_sec, connect_timeout_ms);
   } else {
     // auto-detect: try HTTPS first with port 443, fallback to HTTP with port 80
     http_url_parsed_t https_url = url;
@@ -1332,7 +1471,7 @@ int main(const int argc, const char *argv[]) {
     }
 
     result = https_request(method_flag->value.string_value, &https_url, headers,
-                           timeout_sec);
+                           timeout_sec, connect_timeout_ms);
 
     // fallback to HTTP only on connection/TLS errors (not HTTP status errors)
     if (result == REQUEST_SOCKET_ERROR || result == REQUEST_TLS_ERROR ||
@@ -1347,12 +1486,12 @@ int main(const int argc, const char *argv[]) {
       }
 
       result = http_request(method_flag->value.string_value, &http_url, headers,
-                            timeout_sec);
+                            timeout_sec, connect_timeout_ms);
     }
   }
 #else
-  result =
-      http_request(method_flag->value.string_value, &url, headers, timeout_sec);
+  result = http_request(method_flag->value.string_value, &url, headers,
+                        timeout_sec, connect_timeout_ms);
 #endif
 
   switch (result) {
