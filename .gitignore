@@ -8,6 +8,9 @@
 ## Generated files
 /apps/version.h
 
+## AI shit
+/.claude
+
 ## Temp dirs & trash
 /.test-certs
 /dist

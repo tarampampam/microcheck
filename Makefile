@@ -142,7 +142,7 @@ test:	build/bin/httpcheck \
 	./build/bin/http_test
 	python3 ./tests/feature/httpcheck.py --bin ./build/bin/httpcheck
 	python3 ./tests/feature/httpcheck.py --bin ./build/bin/httpscheck --https
-	python3 ./tests/feature/httpcheck.py --bin ./build/bin/httpscheck
+	python3 ./tests/feature/httpcheck.py --bin ./build/bin/httpscheck --fallback
 	python3 ./tests/feature/portcheck.py --bin ./build/bin/portcheck
 	python3 ./tests/feature/parallel.py --bin ./build/bin/parallel
 	python3 ./tests/feature/pidcheck.py --bin ./build/bin/pidcheck
