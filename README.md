@@ -79,6 +79,20 @@ So, think of this as an alternative to:
 | `parallel`   | ~50KB  | Run multiple commands in parallel         |
 | `pidcheck`   | ~40KB  | Check if process from PID file is running |
 
+> [!WARNING]
+> **Value priority: CLI flag > environment variable > default**. This applies to all `--*-env` flags across
+> all tools. Passing both `--*-env` and its corresponding flag is a common mistake - the explicit flag always
+> wins and the env variable is never read.
+>
+> ```dockerfile
+> # WRONG: HTTP_PORT=9000 is ignored - portcheck always checks 8080
+> HEALTHCHECK CMD ["/bin/portcheck", "--port-env", "HTTP_PORT", "--port", "8080"]
+>
+> # CORRECT: set the default via ENV and let --port-env read it at runtime
+> ENV HTTP_PORT=8080
+> HEALTHCHECK CMD ["/bin/portcheck", "--port-env", "HTTP_PORT"]
+> ```
+
 ### `httpcheck` & `httpscheck`
 
 Those tools perform HTTP health checks. `httpscheck` includes TLS support, while `httpcheck` does not to reduce
